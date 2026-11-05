@@ -5,6 +5,5 @@ import org.springframework.web.bind.annotation.RestController
 
 @RestController
 class MessageController {
-    @GetMapping("/")
-    fun index() = "Hello World!"
+  @GetMapping("/") fun index() = "Hello World!"
 }
