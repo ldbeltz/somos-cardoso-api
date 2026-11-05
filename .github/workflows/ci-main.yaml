@@ -41,7 +41,7 @@ jobs:
           java-version: '25'
           cache: gradle
 
-      - name: Set database configuration
+      - name: Build and validate before deployment
         shell: bash
         run: |
           set -euo pipefail
@@ -50,22 +50,11 @@ jobs:
           : "${DB_PASSWORD:?Set the DB_PASSWORD secret}"
           : "${DB_HOST:?Set the DB_HOST secret}"
           : "${DB_PORT:?Set the DB_PORT secret}"
-          sed -i \
-            -e "s|^    url:.*|    url: jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}|" \
-            -e "s|^    username:.*|    username: ${DB_USER}|" \
-            -e "s|^    password:.*|    password: '${DB_PASSWORD}'|" \
-            src/main/resources/application.yaml
-
-      - name: Build and validate before deployment
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew clean build --no-daemon
-          JAR_FILE="$(find build/libs -maxdepth 1 -type f -name '*.jar' \
-            ! -name '*-plain.jar' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
-          test -n "$JAR_FILE"
-          test -s "$JAR_FILE"
-          echo "JAR_FILE=$JAR_FILE" >> "$GITHUB_ENV"
+          env \
+            SPRING_DATASOURCE_URL="jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}" \
+            SPRING_DATASOURCE_USERNAME="$DB_USER" \
+            SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
+            ./gradlew clean build --no-daemon
 
       - name: Configure SSH
         shell: bash
@@ -80,30 +69,33 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
 
-      - name: Upload application jar
-        shell: bash
-        run: |
-          set -euo pipefail
-          scp -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$JAR_FILE" \
-            "${SSH_USER}@${SERVER_IP}:/tmp/somoscardoso-deploy.jar"
-
       - name: Deploy application
         shell: bash
         run: |
           set -euo pipefail
+          : "${DB_USER:?Set the DB_USER secret}"
+          : "${DB_NAME:?Set the DB_NAME secret}"
+          : "${DB_PASSWORD:?Set the DB_PASSWORD secret}"
+          : "${DB_HOST:?Set the DB_HOST secret}"
+          : "${DB_PORT:?Set the DB_PORT secret}"
+
+          printf -v REMOTE_DB_ENV 'DB_USER=%q DB_NAME=%q DB_PASSWORD=%q DB_HOST=%q DB_PORT=%q' \
+            "$DB_USER" "$DB_NAME" "$DB_PASSWORD" "$DB_HOST" "$DB_PORT"
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "${SSH_USER}@${SERVER_IP}" "bash -s" <<'REMOTE'
+            "${SSH_USER}@${SERVER_IP}" "$REMOTE_DB_ENV bash -s" <<'REMOTE'
           set -euo pipefail
 
           APP_DIR="${HOME}/apps/somos-cardoso-api"
+          cd "$APP_DIR"
+          git pull --ff-only origin main
+          env \
+            SPRING_DATASOURCE_URL="jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}" \
+            SPRING_DATASOURCE_USERNAME="$DB_USER" \
+            SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
+            ./gradlew clean build --no-daemon
+
           PID_FILE="${APP_DIR}/somoscardoso.pid"
           LOG_FILE="${APP_DIR}/somoscardoso.log"
-
-          DEPLOYED_JAR="${APP_DIR}/somoscardoso.jar"
-          mkdir -p "$APP_DIR"
-          test -s /tmp/somoscardoso-deploy.jar
-          mv /tmp/somoscardoso-deploy.jar "$DEPLOYED_JAR"
 
           if [[ -f "$PID_FILE" ]]; then
             OLD_PID="$(cat "$PID_FILE")"
@@ -120,7 +112,16 @@ jobs:
             rm -f "$PID_FILE"
           fi
 
-          nohup java -jar "$DEPLOYED_JAR" > "$LOG_FILE" 2>&1 < /dev/null &
+          JAR_FILE="$(find build/libs -maxdepth 1 -type f -name '*.jar' \
+            ! -name '*-plain.jar' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+          test -n "$JAR_FILE"
+          test -s "$JAR_FILE"
+
+          nohup env \
+            SPRING_DATASOURCE_URL="jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}" \
+            SPRING_DATASOURCE_USERNAME="$DB_USER" \
+            SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
+            java -jar "$JAR_FILE" > "$LOG_FILE" 2>&1 < /dev/null &
           APP_PID=$!
           echo "$APP_PID" > "$PID_FILE"
 
@@ -132,7 +133,6 @@ jobs:
             exit 1
           fi
           echo "Application started with PID $APP_PID"
-          echo "Flyway migrations, if any, are applied during startup."
           REMOTE
 
       - name: Remove SSH credentials
