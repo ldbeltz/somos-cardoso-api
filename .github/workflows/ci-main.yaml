@@ -34,28 +34,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: gradle
-
-      - name: Build and validate before deployment
-        shell: bash
-        run: |
-          set -euo pipefail
-          : "${DB_USER:?Set the DB_USER secret}"
-          : "${DB_NAME:?Set the DB_NAME secret}"
-          : "${DB_PASSWORD:?Set the DB_PASSWORD secret}"
-          : "${DB_HOST:?Set the DB_HOST secret}"
-          : "${DB_PORT:?Set the DB_PORT secret}"
-          env \
-            SPRING_DATASOURCE_URL="jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}" \
-            SPRING_DATASOURCE_USERNAME="$DB_USER" \
-            SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
-            ./gradlew clean build --no-daemon
-
       - name: Configure SSH
         shell: bash
         run: |
@@ -87,11 +65,16 @@ jobs:
 
           APP_DIR="${HOME}/apps/somos-cardoso-api"
           cd "$APP_DIR"
+          
+          git restore --source=HEAD -- src/main/resources/application.yaml
           git pull --ff-only origin main
-          env \
-            SPRING_DATASOURCE_URL="jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}" \
-            SPRING_DATASOURCE_USERNAME="$DB_USER" \
-            SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
+          
+          sed -i \
+            -e "s|^    url:.*|    url: jdbc:mysql://${DB_HOST}:${DB_PORT}/${DB_NAME}|" \
+            -e "s|^    username:.*|    username: ${DB_USER}|" \
+            -e "s|^    password:.*|    password: '${DB_PASSWORD}'|" \
+            src/main/resources/application.yaml
+          
             ./gradlew clean build --no-daemon
 
           PID_FILE="${APP_DIR}/somoscardoso.pid"
