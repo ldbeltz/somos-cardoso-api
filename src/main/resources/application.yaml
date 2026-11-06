@@ -3,9 +3,9 @@ spring:
     name: somoscardoso
 
   datasource:
-    url: jdbc:mysql://localhost:3306/cardosoapidb
-    username: cardoso
-    password: 1jakl#001
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/cardosoapidb}
+    username: ${SPRING_DATASOURCE_USERNAME:cardoso}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
