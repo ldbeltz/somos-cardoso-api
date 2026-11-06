@@ -1,0 +1,54 @@
+name: CI Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SERVER_IP: ${{ secrets.SERVER_IP }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Open database access, build, upload, and deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${SSH_USER:?Missing SSH_USER secret}"
+          : "${SERVER_IP:?Missing SERVER_IP secret}"
+
+          remote="$SSH_USER@$SERVER_IP"
+          remote_jar="/tmp/somos-cardoso-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.jar"
+
+          ./gradlew build
+
+          jar_path="$(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' -print -quit)"
+          test -n "$jar_path"
+          scp "$jar_path" "$remote:$remote_jar"
+          ssh "$remote" "nohup java -jar '$remote_jar' >/tmp/somos-cardoso-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log 2>&1 </dev/null &"

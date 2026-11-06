@@ -34,6 +34,10 @@ dependencies {
   testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
   testImplementation("org.springframework.restdocs:spring-restdocs-mockmvc")
   testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+  // Testcontainers
+  testImplementation("org.springframework.boot:spring-boot-testcontainers")
+  testImplementation("org.testcontainers:testcontainers-junit-jupiter:2.0.5")
+  testImplementation("org.testcontainers:testcontainers-mysql:2.0.5")
 }
 
 kotlin {
