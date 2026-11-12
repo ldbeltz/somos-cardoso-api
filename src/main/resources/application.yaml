@@ -2,10 +2,15 @@ spring:
   application:
     name: somoscardoso
 
+  task:
+    scheduling:
+      pool:
+        size: 2
+
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/cardosoapidb}
     username: ${SPRING_DATASOURCE_USERNAME:cardoso}
-    password: ${SPRING_DATASOURCE_PASSWORD:}
+    password: ${SPRING_DATASOURCE_PASSWORD:dev123}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
@@ -15,4 +20,25 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
-    baseline-on-migrate: true
+    baseline-on-migrate: false
+
+server:
+  servlet:
+    session:
+      timeout: 12h
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
+
+app:
+  draw:
+    poll-ms: ${DRAW_POLL_MS:15000}
+  whatsapp:
+    enabled: ${WHATSAPP_ENABLED:false}
+    access-token: ${WHATSAPP_ACCESS_TOKEN:}
+    phone-number-id: ${WHATSAPP_PHONE_NUMBER_ID:}
+    api-version: ${WHATSAPP_API_VERSION:v23.0}
+    template-name: ${WHATSAPP_TEMPLATE_NAME:}
+    template-language: ${WHATSAPP_TEMPLATE_LANGUAGE:en_US}
+    poll-ms: ${WHATSAPP_POLL_MS:15000}

@@ -8,7 +8,7 @@ import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.mysql.MySQLContainer
 
 @SpringBootTest
-@Testcontainers
+@Testcontainers(disabledWithoutDocker = true)
 class SomoscardosoApplicationTests {
   companion object {
     @Container
