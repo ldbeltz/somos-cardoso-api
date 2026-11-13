@@ -1,7 +1,6 @@
 package com.api.somoscardoso.auth
 
 import com.api.somoscardoso.player.Player
-import com.api.somoscardoso.player.PlayerRepository
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import jakarta.validation.Valid
@@ -58,7 +57,7 @@ class AuthController(
   ): PlayerView {
     val authentication =
         UsernamePasswordAuthenticationToken.authenticated(
-            player.user.id.toString(),
+            requireNotNull(player.user).id.toString(),
             null,
             listOf(SimpleGrantedAuthority("ROLE_PLAYER")),
         )
@@ -71,10 +70,4 @@ class AuthController(
     HttpSessionSecurityContextRepository().saveContext(context, request, response)
     return PlayerView.from(player)
   }
-}
-
-@RestController
-@RequestMapping("/api/v1/players")
-class PlayerController(private val players: PlayerRepository) {
-  @GetMapping fun list() = players.findAll().map(PlayerView::from)
 }

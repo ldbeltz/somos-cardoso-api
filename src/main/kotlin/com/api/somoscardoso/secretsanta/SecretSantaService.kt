@@ -12,7 +12,15 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 
-data class CreateSecretSanta(val name: String, val drawAt: Instant, val playerIds: List<Long>)
+data class CreateSecretSanta(
+    val name: String,
+    val drawAt: Instant,
+    val playerIds: List<Long> = emptyList(),
+)
+
+data class InviteRegistration(val name: String, val phoneNumber: String)
+
+data class InviteInfo(val name: String, val drawAt: Instant)
 
 data class PlayerName(val id: Long, val name: String)
 
@@ -37,13 +45,14 @@ data class SecretSantaDetail(
     val players: List<PlayerName>,
     val myRecipient: PlayerName?,
     val notificationStatus: String?,
+    val inviteToken: String,
 )
 
 @Service
 @Transactional
 class SecretSantaService(
-    private val lists: SSListRepository,
-    private val entries: SSPlayerRepository,
+    private val lists: SecretSantaListRepository,
+    private val entries: SecretSantaPlayerRepository,
     private val players: PlayerRepository,
     private val notifications: WhatsAppNotificationRepository,
     private val draw: CircularDraw,
@@ -65,7 +74,7 @@ class SecretSantaService(
   private fun locked(id: Long) =
       lists.lockById(id) ?: fail(HttpStatus.NOT_FOUND, "Secret Santa not found")
 
-  private fun editable(list: SSList) {
+  private fun editable(list: SecretSantaList) {
     if (list.status != DrawStatus.SCHEDULED || !list.drawAt.isAfter(clock.instant()))
         fail(HttpStatus.CONFLICT, "Registration has closed for this draw")
   }
@@ -108,13 +117,44 @@ class SecretSantaService(
         fail(HttpStatus.BAD_REQUEST, "Players must be distinct")
     val ids = (request.playerIds + me.id!!).distinct()
     if (ids.size > 500) fail(HttpStatus.BAD_REQUEST, "A draw supports at most 500 players")
-    if (ids.size < 2) fail(HttpStatus.BAD_REQUEST, "At least two players are required")
+    if (ids.isEmpty()) fail(HttpStatus.BAD_REQUEST, "The creator must participate")
     val selected = players.findAllById(ids)
     if (selected.size != ids.size) fail(HttpStatus.BAD_REQUEST, "One or more players do not exist")
     selected.forEach(::validPhone)
-    val list = lists.saveAndFlush(SSList(name = name, drawAt = request.drawAt, creatorId = me.id!!))
-    entries.saveAll(ids.map { SSPlayer(ssListId = list.id!!, playerId = it) })
+    val list =
+        lists.saveAndFlush(
+            SecretSantaList(
+                name = name,
+                drawAt = request.drawAt,
+                creatorId = me.id!!,
+                inviteToken = UUID.randomUUID().toString().replace("-", ""),
+            )
+        )
+    entries.saveAll(ids.map { SecretSantaPlayer(ssListId = list.id!!, playerId = it) })
     return detail(list.id!!, email)
+  }
+
+  @Transactional(readOnly = true)
+  fun inviteInfo(token: String): InviteInfo {
+    val list = lists.findByInviteToken(token) ?: fail(HttpStatus.NOT_FOUND, "Invite not found")
+    return InviteInfo(list.name, list.drawAt)
+  }
+
+  fun joinByInvite(token: String, request: InviteRegistration): InviteInfo {
+    val list = lists.findByInviteToken(token) ?: fail(HttpStatus.NOT_FOUND, "Invite not found")
+    editable(list)
+    val name = request.name.trim()
+    if (name.length !in 1..100)
+        fail(HttpStatus.BAD_REQUEST, "Name must contain 1 to 100 characters")
+    val phone = com.api.somoscardoso.player.PhoneNumbers.normalize(request.phoneNumber)
+    val existing = players.findByPhoneNumber(phone)
+    val guest = existing ?: players.save(Player(name = name, phoneNumber = phone))
+    if (existing != null && guest.name.isBlank()) guest.name = name
+    if (entries.findBySsListIdAndPlayerId(list.id!!, guest.id!!) != null)
+        fail(HttpStatus.CONFLICT, "This phone number is already registered in this draw")
+    if (entries.countBySsListId(list.id!!) >= 500) fail(HttpStatus.CONFLICT, "This draw is full")
+    entries.save(SecretSantaPlayer(ssListId = list.id!!, playerId = guest.id!!))
+    return InviteInfo(list.name, list.drawAt)
   }
 
   @Transactional(readOnly = true)
@@ -141,6 +181,7 @@ class SecretSantaService(
         members.map { PlayerName(it.playerId, directory.getValue(it.playerId).name) },
         recipient,
         notifications.findBySsPlayerId(mine.id!!)?.status?.name,
+        list.inviteToken,
     )
   }
 
@@ -151,7 +192,7 @@ class SecretSantaService(
     validPhone(me)
     if (entries.findBySsListIdAndPlayerId(id, me.id!!) == null) {
       if (entries.countBySsListId(id) >= 500) fail(HttpStatus.CONFLICT, "This draw is full")
-      entries.saveAndFlush(SSPlayer(ssListId = id, playerId = me.id!!))
+      entries.saveAndFlush(SecretSantaPlayer(ssListId = id, playerId = me.id!!))
     }
     return detail(id, email)
   }

@@ -7,6 +7,14 @@ import org.springframework.web.bind.annotation.*
 @RestController
 @RequestMapping("/api/v1/secret-santas")
 class SecretSantaController(private val service: SecretSantaService) {
+  @GetMapping("/invites/{token}")
+  fun inviteInfo(@PathVariable token: String) = service.inviteInfo(token)
+
+  @PostMapping("/invites/{token}/join")
+  @ResponseStatus(HttpStatus.CREATED)
+  fun joinByInvite(@PathVariable token: String, @RequestBody request: InviteRegistration) =
+      service.joinByInvite(token, request)
+
   @GetMapping fun all(principal: Principal) = service.all(principal.name)
 
   @PostMapping

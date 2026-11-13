@@ -16,8 +16,8 @@ import org.springframework.web.server.ResponseStatusException
 
 class SecretSantaServiceTest {
   private val now = Instant.parse("2026-12-20T12:00:00Z")
-  private val lists = mock(SSListRepository::class.java)
-  private val entries = mock(SSPlayerRepository::class.java)
+  private val lists = mock(SecretSantaListRepository::class.java)
+  private val entries = mock(SecretSantaPlayerRepository::class.java)
   private val players = mock(PlayerRepository::class.java)
   private val notifications = mock(WhatsAppNotificationRepository::class.java)
   private val service =
@@ -46,7 +46,7 @@ class SecretSantaServiceTest {
 
   @Test
   fun `rejects insufficient players and draw times not in future`() {
-    `when`(players.findByUserId(alice.user.id)).thenReturn(alice)
+    `when`(players.findByUserId(alice.user!!.id)).thenReturn(alice)
     for (request in
         listOf(
             CreateSecretSanta("Christmas", now.plusSeconds(60), listOf(1)),
@@ -55,7 +55,7 @@ class SecretSantaServiceTest {
       assertEquals(
           400,
           assertThrows(ResponseStatusException::class.java) {
-                service.create(alice.user.id.toString(), request)
+                service.create(alice.user!!.id.toString(), request)
               }
               .statusCode
               .value(),
@@ -66,11 +66,12 @@ class SecretSantaServiceTest {
 
   @Test
   fun `due draw persists ring and notifications once`() {
-    val list = SSList(id = 9, name = "Christmas", drawAt = now.minusSeconds(60), creatorId = 1)
+    val list =
+        SecretSantaList(id = 9, name = "Christmas", drawAt = now.minusSeconds(60), creatorId = 1)
     val members =
         listOf(
-            SSPlayer(id = 11, ssListId = 9, playerId = 1),
-            SSPlayer(id = 12, ssListId = 9, playerId = 2),
+            SecretSantaPlayer(id = 11, ssListId = 9, playerId = 1),
+            SecretSantaPlayer(id = 12, ssListId = 9, playerId = 2),
         )
     `when`(lists.lockById(9)).thenReturn(list)
     `when`(entries.findAllBySsListIdOrderByIdAsc(9)).thenReturn(members)
@@ -86,21 +87,21 @@ class SecretSantaServiceTest {
 
   @Test
   fun `does not draw before scheduled instant`() {
-    `when`(lists.lockById(9)).thenReturn(SSList(id = 9, drawAt = now.plusSeconds(1)))
+    `when`(lists.lockById(9)).thenReturn(SecretSantaList(id = 9, drawAt = now.plusSeconds(1)))
     assertFalse(service.drawIfDue(9))
     verifyNoInteractions(entries, notifications)
   }
 
   @Test
   fun `only registered participants can see detail`() {
-    `when`(players.findByUserId(alice.user.id)).thenReturn(alice)
-    `when`(lists.findById(9)).thenReturn(Optional.of(SSList(id = 9)))
+    `when`(players.findByUserId(alice.user!!.id)).thenReturn(alice)
+    `when`(lists.findById(9)).thenReturn(Optional.of(SecretSantaList(id = 9)))
     `when`(entries.findAllBySsListIdOrderByIdAsc(9))
-        .thenReturn(listOf(SSPlayer(id = 12, ssListId = 9, playerId = 2)))
+        .thenReturn(listOf(SecretSantaPlayer(id = 12, ssListId = 9, playerId = 2)))
     assertEquals(
         403,
         assertThrows(ResponseStatusException::class.java) {
-              service.detail(9, alice.user.id.toString())
+              service.detail(9, alice.user!!.id.toString())
             }
             .statusCode
             .value(),
@@ -109,11 +110,11 @@ class SecretSantaServiceTest {
 
   @Test
   fun `joining and leaving lock out when draw is due`() {
-    `when`(lists.lockById(9)).thenReturn(SSList(id = 9, drawAt = now))
+    `when`(lists.lockById(9)).thenReturn(SecretSantaList(id = 9, drawAt = now))
     assertEquals(
         409,
         assertThrows(ResponseStatusException::class.java) {
-              service.join(9, alice.user.id.toString())
+              service.join(9, alice.user!!.id.toString())
             }
             .statusCode
             .value(),
@@ -121,7 +122,7 @@ class SecretSantaServiceTest {
     assertEquals(
         409,
         assertThrows(ResponseStatusException::class.java) {
-              service.leave(9, alice.user.id.toString())
+              service.leave(9, alice.user!!.id.toString())
             }
             .statusCode
             .value(),
@@ -131,24 +132,24 @@ class SecretSantaServiceTest {
   @Test
   fun `creator cannot leave and a draw cannot fall below two players`() {
     `when`(lists.lockById(9))
-        .thenReturn(SSList(id = 9, drawAt = now.plusSeconds(60), creatorId = 1))
-    `when`(players.findByUserId(alice.user.id)).thenReturn(alice)
+        .thenReturn(SecretSantaList(id = 9, drawAt = now.plusSeconds(60), creatorId = 1))
+    `when`(players.findByUserId(alice.user!!.id)).thenReturn(alice)
     assertEquals(
         409,
         assertThrows(ResponseStatusException::class.java) {
-              service.leave(9, alice.user.id.toString())
+              service.leave(9, alice.user!!.id.toString())
             }
             .statusCode
             .value(),
     )
-    `when`(players.findByUserId(bob.user.id)).thenReturn(bob)
+    `when`(players.findByUserId(bob.user!!.id)).thenReturn(bob)
     `when`(entries.findBySsListIdAndPlayerId(9, 2))
-        .thenReturn(SSPlayer(id = 12, ssListId = 9, playerId = 2))
+        .thenReturn(SecretSantaPlayer(id = 12, ssListId = 9, playerId = 2))
     `when`(entries.countBySsListId(9)).thenReturn(2)
     assertEquals(
         409,
         assertThrows(ResponseStatusException::class.java) {
-              service.leave(9, bob.user.id.toString())
+              service.leave(9, bob.user!!.id.toString())
             }
             .statusCode
             .value(),

@@ -71,12 +71,12 @@ class UserPlayerMigrationTest {
               assertNull(rows.getString("password_hash"))
               assertFalse(rows.next())
             }
-        sql.executeQuery("SELECT creator_id FROM ss_lists WHERE id=11").use {
+        sql.executeQuery("SELECT creator_id FROM secret_santa_lists WHERE id=11").use {
           it.next()
           assertEquals(41L, it.getLong(1))
         }
         sql.executeQuery(
-                "SELECT player_id,recipient_id FROM ss_players WHERE ss_list_id=11 ORDER BY id"
+                "SELECT player_id,recipient_id FROM secret_santa_players WHERE ss_list_id=11 ORDER BY id"
             )
             .use {
               assertTrue(it.next())

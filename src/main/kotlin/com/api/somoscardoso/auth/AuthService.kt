@@ -32,8 +32,22 @@ class AuthService(
             HttpStatus.BAD_REQUEST,
             "Password must fit within 72 UTF-8 bytes",
         )
+    val existing = players.findByPhoneNumber(phone)
+    if (existing?.user != null)
+        throw ResponseStatusException(HttpStatus.CONFLICT, "This phone number is already in use")
     val user =
-        users.saveAndFlush(User(email = email, passwordHash = encoder.encode(request.password)))
+        users.saveAndFlush(
+            User(
+                email = email,
+                phoneNumber = phone,
+                passwordHash = encoder.encode(request.password),
+            )
+        )
+    if (existing != null) {
+      existing.name = request.name.trim()
+      existing.user = user
+      return players.saveAndFlush(existing)
+    }
     return players.saveAndFlush(
         Player(name = request.name.trim(), phoneNumber = phone, user = user)
     )
@@ -64,7 +78,12 @@ class AuthService(
   @Transactional
   fun updatePhone(subject: String, request: PhoneRequest): Player {
     val player = current(subject)
-    player.phoneNumber = PhoneNumbers.normalize(request.phoneNumber)
+    val phone = PhoneNumbers.normalize(request.phoneNumber)
+    val other = players.findByPhoneNumber(phone)
+    if (other != null && other.id != player.id)
+        throw ResponseStatusException(HttpStatus.CONFLICT, "This phone number is already in use")
+    player.phoneNumber = phone
+    requireNotNull(player.user).phoneNumber = phone
     return players.save(player)
   }
 }

@@ -6,6 +6,7 @@ import com.api.somoscardoso.player.Player
 import com.api.somoscardoso.player.PlayerRepository
 import com.api.somoscardoso.user.User
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicLong
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -37,10 +38,11 @@ import org.springframework.web.server.ResponseStatusException
 @AutoConfigureMockMvc
 @Transactional
 class SecretSantaPersistenceTest {
+  private val phoneSequence = AtomicLong()
   @Autowired lateinit var service: SecretSantaService
   @Autowired lateinit var players: PlayerRepository
-  @Autowired lateinit var lists: SSListRepository
-  @Autowired lateinit var entries: SSPlayerRepository
+  @Autowired lateinit var lists: SecretSantaListRepository
+  @Autowired lateinit var entries: SecretSantaPlayerRepository
   @Autowired lateinit var notifications: WhatsAppNotificationRepository
   @Autowired lateinit var mvc: MockMvc
 
@@ -49,7 +51,8 @@ class SecretSantaPersistenceTest {
           Player(
               name = name,
               user = User(email = "$name@draw.test"),
-              phoneNumber = "+5511999999999",
+              phoneNumber =
+                  "+551199999${phoneSequence.incrementAndGet().toString().padStart(4, '0')}",
           )
       )
 
@@ -61,7 +64,7 @@ class SecretSantaPersistenceTest {
     val outsider = player("ringOutsider")
     val detail =
         service.create(
-            alice.user.id.toString(),
+            alice.user!!.id.toString(),
             CreateSecretSanta(
                 "Cardoso Christmas",
                 Instant.now().plusSeconds(3600),
@@ -87,16 +90,18 @@ class SecretSantaPersistenceTest {
           notifications.findBySsPlayerId(it.id!!)!!.status == NotificationStatus.PENDING
         }
     )
-    assertNotNull(service.detail(detail.id, alice.user.id.toString()).myRecipient)
+    assertNotNull(service.detail(detail.id, alice.user!!.id.toString()).myRecipient)
     assertEquals(
         403,
         assertThrows(ResponseStatusException::class.java) {
-              service.detail(detail.id, outsider.user.id.toString())
+              service.detail(detail.id, outsider.user!!.id.toString())
             }
             .statusCode
             .value(),
     )
-    assertFalse(service.all(outsider.user.id.toString()).first { it.id == detail.id }.isParticipant)
+    assertFalse(
+        service.all(outsider.user!!.id.toString()).first { it.id == detail.id }.isParticipant
+    )
   }
 
   @Test
@@ -106,40 +111,42 @@ class SecretSantaPersistenceTest {
     val outsider = player("httpOutsider")
     val detail =
         service.create(
-            alice.user.id.toString(),
+            alice.user!!.id.toString(),
             CreateSecretSanta("HTTP draw", Instant.now().plusSeconds(3600), listOf(bob.id!!)),
         )
     mvc.perform(get("/api/v1/secret-santas")).andExpect(status().isUnauthorized)
-    mvc.perform(get("/api/v1/secret-santas/${detail.id}").with(user(outsider.user.id.toString())))
+    mvc.perform(get("/api/v1/secret-santas/${detail.id}").with(user(outsider.user!!.id.toString())))
         .andExpect(status().isForbidden)
-    mvc.perform(get("/api/v1/secret-santas/${detail.id}").with(user(alice.user.id.toString())))
+    mvc.perform(get("/api/v1/secret-santas/${detail.id}").with(user(alice.user!!.id.toString())))
         .andExpect(status().isOk)
         .andExpect(jsonPath("$.players[0].recipientId").doesNotExist())
         .andExpect(jsonPath("$.myRecipient").isEmpty)
     mvc.perform(
-            post("/api/v1/secret-santas/${detail.id}/join").with(user(outsider.user.id.toString()))
+            post("/api/v1/secret-santas/${detail.id}/join")
+                .with(user(outsider.user!!.id.toString()))
         )
         .andExpect(status().isForbidden)
     mvc.perform(
             post("/api/v1/secret-santas/${detail.id}/join")
-                .with(user(outsider.user.id.toString()))
+                .with(user(outsider.user!!.id.toString()))
                 .with(csrf())
         )
         .andExpect(status().isOk)
         .andExpect(jsonPath("$.playerCount").value(3))
     mvc.perform(
             delete("/api/v1/secret-santas/${detail.id}/players/me")
-                .with(user(outsider.user.id.toString()))
+                .with(user(outsider.user!!.id.toString()))
                 .with(csrf())
         )
         .andExpect(status().isNoContent)
     mvc.perform(
             post("/api/v1/secret-santas")
-                .with(user(alice.user.id.toString()))
+                .with(user(alice.user!!.id.toString()))
                 .with(csrf())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""{"name":"Too small","drawAt":"2099-12-24T12:00:00Z","playerIds":[]}""")
         )
-        .andExpect(status().isBadRequest)
+        .andExpect(status().isCreated)
+        .andExpect(jsonPath("$.playerCount").value(1))
   }
 }

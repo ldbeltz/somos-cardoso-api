@@ -47,7 +47,7 @@ class GoogleIdentityServiceTests {
     verify(players).saveAndFlush(playerCapture.capture())
     assertEquals("new@example.com", userCapture.value.email)
     assertEquals(userCapture.value.id.toString(), principal.name)
-    assertEquals(userCapture.value.id, playerCapture.value.user.id)
+    assertEquals(userCapture.value.id, playerCapture.value.user!!.id)
     assertNull(userCapture.value.passwordHash)
     assertNull(playerCapture.value.phoneNumber)
     assertEquals("google-subject", userCapture.value.googleSubject)

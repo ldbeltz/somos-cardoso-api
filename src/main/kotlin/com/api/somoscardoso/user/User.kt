@@ -13,6 +13,7 @@ class User(
     @Column(columnDefinition = "char(36)")
     var id: UUID = UUID.randomUUID(),
     @Column(nullable = false, unique = true, length = 254) var email: String = "",
+    @Column(name = "phone_number", length = 16, unique = true) var phoneNumber: String? = null,
     @Column(name = "password_hash") var passwordHash: String? = null,
     @Column(name = "google_subject", unique = true) var googleSubject: String? = null,
 )

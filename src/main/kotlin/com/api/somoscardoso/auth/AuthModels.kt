@@ -17,18 +17,18 @@ data class PhoneRequest(@field:NotBlank @field:Size(max = 40) val phoneNumber: S
 
 data class PlayerView(
     val id: Long,
-    val userId: UUID,
+    val userId: UUID?,
     val name: String,
-    val email: String,
+    val email: String?,
     val phoneNumber: String?,
 ) {
   companion object {
     fun from(player: Player) =
         PlayerView(
             requireNotNull(player.id),
-            player.user.id,
+            player.user?.id,
             player.name,
-            player.user.email,
+            player.user?.email,
             player.phoneNumber,
         )
   }

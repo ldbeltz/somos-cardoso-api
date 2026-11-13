@@ -16,7 +16,7 @@ class DrawSchedulingConfiguration {
 
 @Component
 class DrawScheduler(
-    private val lists: SSListRepository,
+    private val lists: SecretSantaListRepository,
     private val service: SecretSantaService,
     private val clock: Clock,
 ) {
