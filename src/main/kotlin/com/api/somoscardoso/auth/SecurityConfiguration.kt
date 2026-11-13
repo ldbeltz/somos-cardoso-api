@@ -41,6 +41,8 @@ class SecurityConfiguration {
           .permitAll()
       auth.anyRequest().authenticated()
     }
+    http.formLogin { form -> form.disable() }
+    http.httpBasic { basic -> basic.disable() }
     // CSRF remains enabled. The frontend obtains its masked token through /auth/csrf.
     http.securityContext { it.securityContextRepository(HttpSessionSecurityContextRepository()) }
     http.exceptionHandling {
