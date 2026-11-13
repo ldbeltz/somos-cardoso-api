@@ -216,7 +216,12 @@ class SecretSantaService(
     val now = clock.instant()
     if (list.status != DrawStatus.SCHEDULED || list.drawAt.isAfter(now)) return false
     val members = entries.findAllBySsListIdOrderByIdAsc(id)
-    if (members.size < 2) return false
+    if (members.size < 2) {
+      list.status = DrawStatus.NOT_DRAWN
+      list.drawnAt = now
+      lists.save(list)
+      return true
+    }
     val directory = players.findAllById(members.map { it.playerId }).associateBy { it.id!! }
     val assignments = draw.assign(members.map { it.playerId })
     members.forEach { entry ->

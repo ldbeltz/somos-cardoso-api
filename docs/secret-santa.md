@@ -38,7 +38,9 @@ All routes require authenticated sessions and state-changing requests require CS
 - POST /api/v1/secret-santas/{id}/join: joins before the cutoff; returns detail.
 - DELETE /api/v1/secret-santas/{id}/players/me: leaves before cutoff; returns 204.
 
-Draw status is SCHEDULED or DRAWN. Notification status is PENDING, SENDING, or
+Draw status is SCHEDULED, DRAWN, or NOT_DRAWN. A due draw with fewer than two
+players becomes NOT_DRAWN and does not create assignments or notifications.
+Notification status is PENDING, SENDING, or
 SENT. SENT means the WhatsApp API accepted the request; it is not a delivery
 receipt. Without credentials, the draw still takes place and messages remain
 PENDING until the provider is enabled. No recipients are logged.

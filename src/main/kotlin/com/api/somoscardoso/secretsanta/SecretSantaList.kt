@@ -8,6 +8,7 @@ import org.hibernate.type.SqlTypes
 enum class DrawStatus {
   SCHEDULED,
   DRAWN,
+  NOT_DRAWN,
 }
 
 @Entity
