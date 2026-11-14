@@ -41,4 +41,9 @@ app:
     api-version: ${WHATSAPP_API_VERSION:v23.0}
     template-name: ${WHATSAPP_TEMPLATE_NAME:}
     template-language: ${WHATSAPP_TEMPLATE_LANGUAGE:en_US}
+    registration:
+      enabled: ${WHATSAPP_REGISTRATION_ENABLED:false}
+      template-name: ${WHATSAPP_REGISTRATION_TEMPLATE_NAME:}
+      template-language: ${WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE:pt_PT}
+      time-zone: ${WHATSAPP_REGISTRATION_TIME_ZONE:America/Maceio}
     poll-ms: ${WHATSAPP_POLL_MS:15000}

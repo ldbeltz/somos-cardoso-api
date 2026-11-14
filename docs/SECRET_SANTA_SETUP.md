@@ -19,11 +19,82 @@ Reference: https://docs.spring.io/spring-security/reference/servlet/oauth2/login
 
 ## WhatsApp
 
-Configure Meta WhatsApp Cloud API credentials, sender phone-number ID and an approved template. The template takes two body text parameters in order: draw name and recipient name. Example: In {{1}}, your Secret Santa recipient is {{2}}. Obtain recipient messaging permission before enabling delivery. Set WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_API_VERSION and WHATSAPP_ENABLED=true. Pin a version supported by your Meta app.
+Configure Meta WhatsApp Cloud API credentials, sender phone-number ID and approved templates. Draw-result messages take two body text parameters: draw name and assigned recipient name. Enrollment confirmations take draw name and scheduled date/time. Obtain participants' permission before enabling either delivery type. Set the shared credentials and API version, then configure each template independently. Pin a version supported by your Meta app.
 
-Delivery is disabled by default: jobs stay pending, and secrets and recipient data are not logged. Draws atomically save the ring and one notification per player. A separate worker leases jobs and retries failures with bounded backoff. SENT means Meta accepted the API request, not confirmed handset delivery. Receipts/webhooks are not implemented. A crash after Meta acceptance but before local acknowledgement can cause a duplicate message; it never triggers a new draw.
+Delivery is disabled by default: jobs stay pending, and secrets and recipient data are not logged. `WHATSAPP_ENABLED` is the master switch for all sends. `WHATSAPP_REGISTRATION_ENABLED` opts in to enrollment notices; missing registration configuration does not disable configured result delivery. Registration rows are canceled when the draw starts, and the dispatcher excludes them once the scheduled time arrives, preventing late confirmations after results. Draws atomically save the ring and one result notification per player. A separate worker leases jobs and retries failures with bounded backoff. SENT means Meta accepted the API request, not confirmed handset delivery. Receipts/webhooks are not implemented. A crash after Meta acceptance but before local acknowledgement can cause a duplicate message; it never triggers a new draw.
 
 Reference: https://www.postman.com/meta/whatsapp-business-platform/request/o65u5m5/send-message-template-text
+
+### Production WhatsApp configuration
+
+The deployment workflow in `.github/workflows/ci-deploy.yaml` builds
+`ldbeltz/somos-cardoso-api:latest` and triggers Coolify. If this is the deployment
+used by your server, open the existing backend Compose resource in Coolify and
+update its Compose definition from `compose.prod.yaml`. That file includes the
+server's MySQL and API services, references the WhatsApp variables in
+`api.environment`, and joins the API to both the default database network and
+the external `coolify` network. Keep the existing Coolify resource/project and
+`mysql_data` volume so the deployment continues using the same database.
+
+Add or update the variables in `.env.whatsapp.example` under **Environment
+Variables**. These are runtime values, not Docker build arguments. Enter the
+access token directly in Coolify, keep existing database and authentication
+settings, and save the changes. Adding Coolify variables alone is insufficient
+for a Compose stack: the Compose definition must reference them. Redeploy the
+resource to apply both changes.
+
+The configured result template is `amigo_secreto_resultado`, language `pt_BR`,
+using sender Phone Number ID `1499882366535367`. Its positional body parameters
+are `{{1}}` = draw name and `{{2}}` = assigned recipient name. The fixed text
+header shown in the template preview does not require a header parameter.
+
+Keep `WHATSAPP_ENABLED=false` while the template is pending. Once Meta approves
+it, confirm the sender is registered, the token can send messages for that
+WhatsApp account, the account has its required payment method, and participants
+have agreed to receive notifications. Before enabling, review existing pending
+notifications: enabling the dispatcher can send those as well. Set
+`WHATSAPP_ENABLED=true` and redeploy when ready. An HTTP acceptance is not a
+delivery receipt; confirm receipt on a consenting test participant's phone.
+
+Enrollment uses the independent `amigo_secreto_inscricao` template with
+language `pt_PT` (Meta's `Portuguese (POR)` label). Its body parameters are
+`{{1}}` = draw name and `{{2}}` = scheduled date/time formatted as
+`dd/MM/yyyy HH:mm` in `America/Maceio` by default. Set
+`WHATSAPP_REGISTRATION_TIME_ZONE` to another IANA timezone if needed. The fixed
+text header `Inscrição Amigo Secreto` has no dynamic parameters. The notice
+contains no recipient assignment. Set
+`WHATSAPP_REGISTRATION_TEMPLATE_NAME`,
+`WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE`, and
+`WHATSAPP_REGISTRATION_ENABLED=true` after Meta approves this template and
+participants have agreed to receive enrollment notices. New memberships get a
+confirmation at draw creation, account join, or guest invite registration;
+unchanged memberships do not enqueue another notice. There is currently no
+draw schedule update endpoint.
+
+`WHATSAPP_API_VERSION=v23.0` matches the existing backend default. Confirm it is
+supported by the Meta app, or set a supported version explicitly.
+
+The result template settings (`WHATSAPP_TEMPLATE_NAME` and
+`WHATSAPP_TEMPLATE_LANGUAGE`) apply only to draw results. Enrollment uses the
+separate `WHATSAPP_REGISTRATION_TEMPLATE_NAME` and
+`WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE` settings described above.
+
+For Docker deployments outside Coolify, merge the example's variables into the
+existing API service environment, or copy it to the ignored `.env.whatsapp`
+file and pass it using the API service's `env_file` setting. Spring does not
+automatically load the file. Restrict a secret-bearing file with
+`chmod 600 .env.whatsapp`. After changes, recreate the API container with the
+existing complete deployment configuration. `compose.prod.yaml` now includes
+the API image and database connection. For a manual deployment of that same
+stack, merge the WhatsApp entries into its existing `.env`, retain the database
+credentials, and run `docker compose -f compose.prod.yaml config --quiet`, then
+`docker compose -f compose.prod.yaml up -d --no-deps --force-recreate api` from
+the existing deployment directory/project. The external `coolify` network and
+healthy MySQL service must already exist. For a Coolify-managed stack, use
+Coolify's deployment controls instead.
+
+References: [Coolify service environment variables](https://coolify.io/docs/services/configuration/environment-variables),
+[Docker container environment variables](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/).
 
 ## Production and existing Docker files
 
@@ -31,7 +102,7 @@ Use HTTPS and SESSION_COOKIE_SECURE=true. Proxy /api/v1/*, /oauth2/* and /login/
 
 Next.js captures rewrite targets at build time: build with API_INTERNAL_URL reachable from its runtime. In Docker this is typically http://api:8080 rather than localhost. Dockerfile accepts that build argument.
 
-The existing untracked .env.example and compose.prod.yaml are preserved. The optional compose.secret-santa.yaml overlay passes provider settings into the API container. It does not build or publish the changed image: build/tag the new backend and use its verified image before deploying. Review migrations and back up MySQL before production. Keep credentials outside Git.
+The production compose.prod.yaml matches the supplied server stack, with WhatsApp runtime settings and a shared database network added. The optional compose.secret-santa.yaml overlay also passes Google and frontend settings into the API container; populate those variables if using it. Compose does not build or publish the changed image: build/tag the new backend and use its verified image before deploying. Review migrations and back up MySQL before production. Keep credentials outside Git.
 
 Sessions are in memory and expire on API restart. Players, draws, assignments and jobs persist in MySQL. Registered accounts can browse draw summaries and the player directory. Only participants can read draw details, and only their own recipient is returned. Registration is open in this implementation; restrict access at the deployment boundary if family-only enrollment is required.
 

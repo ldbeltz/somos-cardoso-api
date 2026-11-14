@@ -17,15 +17,16 @@ class NotificationDispatcherTest {
 
   @Test
   fun `missing provider configuration leaves outbox untouched`() {
-    `when`(sender.enabled).thenReturn(false)
+    `when`(sender.enabledTypes).thenReturn(emptySet())
     NotificationDispatcher(repository, transactions, sender, clock).dispatch()
     verifyNoInteractions(repository, transactions)
   }
 
   @Test
   fun `failed provider schedules retry instead of marking sent`() {
-    `when`(sender.enabled).thenReturn(true)
-    `when`(repository.findDueIds(now, PageRequest.of(0, 25))).thenReturn(listOf(1L))
+    `when`(sender.enabledTypes).thenReturn(setOf(NotificationType.DRAW_RESULT))
+    `when`(repository.findDueIds(now, setOf(NotificationType.DRAW_RESULT), PageRequest.of(0, 25)))
+        .thenReturn(listOf(1L))
     val notification =
         WhatsAppNotification(
             id = 1,
@@ -35,17 +36,16 @@ class NotificationDispatcherTest {
             attempts = 1,
         )
     `when`(transactions.claim(1)).thenReturn(notification)
-    doThrow(RuntimeException("provider unavailable"))
-        .`when`(sender)
-        .send(notification.phone, "Christmas", "Bob")
+    doThrow(RuntimeException("provider unavailable")).`when`(sender).send(notification)
     NotificationDispatcher(repository, transactions, sender, clock).dispatch()
     verify(transactions).finish(1, 1, false)
   }
 
   @Test
   fun `accepted provider request marks notification sent`() {
-    `when`(sender.enabled).thenReturn(true)
-    `when`(repository.findDueIds(now, PageRequest.of(0, 25))).thenReturn(listOf(1L))
+    `when`(sender.enabledTypes).thenReturn(setOf(NotificationType.DRAW_RESULT))
+    `when`(repository.findDueIds(now, setOf(NotificationType.DRAW_RESULT), PageRequest.of(0, 25)))
+        .thenReturn(listOf(1L))
     val notification =
         WhatsAppNotification(
             id = 1,
@@ -81,6 +81,27 @@ class NotificationDispatcherTest {
             )
         )
     assertNull(real.claim(2))
+  }
+
+  @Test
+  fun `claim rejects cancelled and expired registration notices`() {
+    val real = NotificationDeliveryTransactions(repository, clock)
+    val cancelled = WhatsAppNotification(id = 3, status = NotificationStatus.CANCELLED)
+    `when`(repository.lockById(3)).thenReturn(cancelled)
+    assertNull(real.claim(3))
+    verify(repository, never()).save(cancelled)
+
+    val expired =
+        WhatsAppNotification(
+            id = 4,
+            type = NotificationType.REGISTRATION,
+            scheduledDrawAt = now,
+            status = NotificationStatus.PENDING,
+        )
+    `when`(repository.lockById(4)).thenReturn(expired)
+    assertNull(real.claim(4))
+    assertEquals(NotificationStatus.CANCELLED, expired.status)
+    verify(repository).save(expired)
   }
 
   @Test

@@ -1,5 +1,6 @@
 package com.api.somoscardoso.secretsanta
 
+import com.api.somoscardoso.messaging.NotificationType
 import com.api.somoscardoso.messaging.WhatsAppNotification
 import com.api.somoscardoso.messaging.WhatsAppNotificationRepository
 import com.api.somoscardoso.player.Player
@@ -20,7 +21,7 @@ data class CreateSecretSanta(
 
 data class InviteRegistration(val name: String, val phoneNumber: String)
 
-data class InviteInfo(val name: String, val drawAt: Instant)
+data class InviteInfo(val name: String, val drawAt: Instant, val status: DrawStatus)
 
 data class PlayerName(val id: Long, val name: String)
 
@@ -76,7 +77,10 @@ class SecretSantaService(
 
   private fun editable(list: SecretSantaList) {
     if (list.status != DrawStatus.SCHEDULED || !list.drawAt.isAfter(clock.instant()))
-        fail(HttpStatus.CONFLICT, "Registration has closed for this draw")
+        fail(
+            HttpStatus.CONFLICT,
+            "This invite is closed. Players can only join a scheduled draw before its draw time.",
+        )
   }
 
   private fun validPhone(player: Player) {
@@ -130,14 +134,19 @@ class SecretSantaService(
                 inviteToken = UUID.randomUUID().toString().replace("-", ""),
             )
         )
-    entries.saveAll(ids.map { SecretSantaPlayer(ssListId = list.id!!, playerId = it) })
+    val memberships =
+        entries.saveAll(ids.map { SecretSantaPlayer(ssListId = list.id!!, playerId = it) })
+    val directory = selected.associateBy { it.id!! }
+    notifications.saveAll(
+        memberships.map { registrationNotification(it, list, directory.getValue(it.playerId)) }
+    )
     return detail(list.id!!, email)
   }
 
   @Transactional(readOnly = true)
   fun inviteInfo(token: String): InviteInfo {
     val list = lists.findByInviteToken(token) ?: fail(HttpStatus.NOT_FOUND, "Invite not found")
-    return InviteInfo(list.name, list.drawAt)
+    return InviteInfo(list.name, list.drawAt, list.status)
   }
 
   fun joinByInvite(token: String, request: InviteRegistration): InviteInfo {
@@ -153,8 +162,9 @@ class SecretSantaService(
     if (entries.findBySsListIdAndPlayerId(list.id!!, guest.id!!) != null)
         fail(HttpStatus.CONFLICT, "This phone number is already registered in this draw")
     if (entries.countBySsListId(list.id!!) >= 500) fail(HttpStatus.CONFLICT, "This draw is full")
-    entries.save(SecretSantaPlayer(ssListId = list.id!!, playerId = guest.id!!))
-    return InviteInfo(list.name, list.drawAt)
+    val membership = entries.save(SecretSantaPlayer(ssListId = list.id!!, playerId = guest.id!!))
+    notifications.save(registrationNotification(membership, list, guest))
+    return InviteInfo(list.name, list.drawAt, status = list.status)
   }
 
   @Transactional(readOnly = true)
@@ -180,7 +190,10 @@ class SecretSantaService(
         true,
         members.map { PlayerName(it.playerId, directory.getValue(it.playerId).name) },
         recipient,
-        notifications.findBySsPlayerId(mine.id!!)?.status?.name,
+        notifications
+            .findBySsPlayerIdAndType(mine.id!!, NotificationType.DRAW_RESULT)
+            ?.status
+            ?.name,
         list.inviteToken,
     )
   }
@@ -192,7 +205,8 @@ class SecretSantaService(
     validPhone(me)
     if (entries.findBySsListIdAndPlayerId(id, me.id!!) == null) {
       if (entries.countBySsListId(id) >= 500) fail(HttpStatus.CONFLICT, "This draw is full")
-      entries.saveAndFlush(SecretSantaPlayer(ssListId = id, playerId = me.id!!))
+      val membership = entries.saveAndFlush(SecretSantaPlayer(ssListId = id, playerId = me.id!!))
+      notifications.save(registrationNotification(membership, list, me))
     }
     return detail(id, email)
   }
@@ -207,6 +221,7 @@ class SecretSantaService(
             ?: fail(HttpStatus.NOT_FOUND, "You are not registered in this draw")
     if (entries.countBySsListId(id) <= 2)
         fail(HttpStatus.CONFLICT, "At least two players must remain")
+    notifications.deleteAllBySsPlayerId(entry.id!!)
     entries.delete(entry)
   }
 
@@ -216,6 +231,15 @@ class SecretSantaService(
     val now = clock.instant()
     if (list.status != DrawStatus.SCHEDULED || list.drawAt.isAfter(now)) return false
     val members = entries.findAllBySsListIdOrderByIdAsc(id)
+    members.forEach { member ->
+      notifications.findBySsPlayerIdAndType(member.id!!, NotificationType.REGISTRATION)?.let {
+          notice ->
+        if (notice.status != com.api.somoscardoso.messaging.NotificationStatus.SENT) {
+          notice.status = com.api.somoscardoso.messaging.NotificationStatus.CANCELLED
+          notifications.save(notice)
+        }
+      }
+    }
     if (members.size < 2) {
       list.status = DrawStatus.NOT_DRAWN
       list.drawnAt = now
@@ -232,6 +256,7 @@ class SecretSantaService(
               phone = directory.getValue(entry.playerId).phoneNumber!!,
               groupName = list.name,
               recipientName = directory.getValue(entry.recipientId!!).name,
+              type = NotificationType.DRAW_RESULT,
               nextAttemptAt = now,
           )
       )
@@ -242,4 +267,18 @@ class SecretSantaService(
     lists.save(list)
     return true
   }
+
+  private fun registrationNotification(
+      membership: SecretSantaPlayer,
+      list: SecretSantaList,
+      participant: Player,
+  ) =
+      WhatsAppNotification(
+          ssPlayerId = requireNotNull(membership.id),
+          phone = requireNotNull(participant.phoneNumber),
+          groupName = list.name,
+          type = NotificationType.REGISTRATION,
+          scheduledDrawAt = list.drawAt,
+          nextAttemptAt = clock.instant(),
+      )
 }

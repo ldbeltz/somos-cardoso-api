@@ -16,11 +16,21 @@ class NotificationDeliveryTransactions(
   @Transactional
   fun claim(id: Long): WhatsAppNotification? {
     val row = repository.lockById(id) ?: return null
-    if (row.status == NotificationStatus.SENT || row.nextAttemptAt.isAfter(clock.instant()))
+    if (row.status == NotificationStatus.SENT || row.status == NotificationStatus.CANCELLED)
         return null
+    val now = clock.instant()
+    if (
+        row.type == NotificationType.REGISTRATION &&
+            row.scheduledDrawAt?.let { !it.isAfter(now) } == true
+    ) {
+      row.status = NotificationStatus.CANCELLED
+      repository.save(row)
+      return null
+    }
+    if (row.nextAttemptAt.isAfter(now)) return null
     row.status = NotificationStatus.SENDING
     row.attempts++
-    row.nextAttemptAt = clock.instant().plus(Duration.ofMinutes(5))
+    row.nextAttemptAt = now.plus(Duration.ofMinutes(5))
     repository.saveAndFlush(row)
     return row
   }
@@ -50,12 +60,13 @@ class NotificationDispatcher(
   @Scheduled(fixedDelayString = "\${app.whatsapp.poll-ms:15000}")
   fun dispatch() {
     // Missing credentials must never consume attempts or mark a message as sent.
-    if (!sender.enabled) return
-    repository.findDueIds(clock.instant(), PageRequest.of(0, 25)).forEach { id ->
+    if (sender.enabledTypes.isEmpty()) return
+    repository.findDueIds(clock.instant(), sender.enabledTypes, PageRequest.of(0, 25)).forEach { id
+      ->
       val message = transactions.claim(id) ?: return@forEach
       val success =
           try {
-            sender.send(message.phone, message.groupName, message.recipientName)
+            sender.send(message)
             true
           } catch (_: Exception) {
             false

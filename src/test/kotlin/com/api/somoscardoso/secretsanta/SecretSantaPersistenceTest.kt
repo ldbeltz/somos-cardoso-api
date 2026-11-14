@@ -1,6 +1,7 @@
 package com.api.somoscardoso.secretsanta
 
 import com.api.somoscardoso.messaging.NotificationStatus
+import com.api.somoscardoso.messaging.NotificationType
 import com.api.somoscardoso.messaging.WhatsAppNotificationRepository
 import com.api.somoscardoso.player.Player
 import com.api.somoscardoso.player.PlayerRepository
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
+import org.springframework.data.domain.PageRequest
 import org.springframework.http.MediaType
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user
@@ -62,6 +64,7 @@ class SecretSantaPersistenceTest {
     val bob = player("ringBob")
     val clara = player("ringClara")
     val outsider = player("ringOutsider")
+    val joiner = player("ringJoiner")
     val detail =
         service.create(
             alice.user!!.id.toString(),
@@ -73,6 +76,41 @@ class SecretSantaPersistenceTest {
         )
     assertEquals(3, detail.playerCount)
     assertNull(detail.myRecipient)
+    var members = entries.findAllBySsListIdOrderByIdAsc(detail.id)
+    assertEquals(
+        3,
+        members.count {
+          notifications.findBySsPlayerIdAndType(it.id!!, NotificationType.REGISTRATION) != null
+        },
+    )
+    assertTrue(
+        members.all {
+          notifications
+              .findBySsPlayerIdAndType(it.id!!, NotificationType.REGISTRATION)!!
+              .scheduledDrawAt == detail.drawAt
+        }
+    )
+    val dueAtCreation =
+        notifications.findDueIds(
+            Instant.now(),
+            setOf(NotificationType.REGISTRATION),
+            PageRequest.of(0, 25),
+        )
+    assertEquals(3, dueAtCreation.size)
+    assertTrue(
+        notifications
+            .findDueIds(
+                Instant.now(),
+                setOf(NotificationType.DRAW_RESULT),
+                PageRequest.of(0, 25),
+            )
+            .isEmpty()
+    )
+    service.join(detail.id, joiner.user!!.id.toString())
+    assertEquals(4L, notifications.count())
+    assertEquals(4, entries.findAllBySsListIdOrderByIdAsc(detail.id).size)
+    service.join(detail.id, joiner.user!!.id.toString())
+    assertEquals(4L, notifications.count())
     val list = lists.findById(detail.id).orElseThrow()
     list.drawAt = Instant.now().minusSeconds(60)
     lists.saveAndFlush(list)
@@ -81,16 +119,25 @@ class SecretSantaPersistenceTest {
     entries.flush()
     notifications.flush()
     assertFalse(service.drawIfDue(detail.id))
-    assertEquals(beforeNotifications + 3, notifications.count())
-    val members = entries.findAllBySsListIdOrderByIdAsc(detail.id)
+    assertEquals(beforeNotifications + 4, notifications.count())
+    members = entries.findAllBySsListIdOrderByIdAsc(detail.id)
     assertEquals(members.map { it.playerId }.toSet(), members.map { it.recipientId }.toSet())
     assertTrue(members.all { it.playerId != it.recipientId })
     assertTrue(
         members.all {
-          notifications.findBySsPlayerId(it.id!!)!!.status == NotificationStatus.PENDING
+          notifications.findBySsPlayerIdAndType(it.id!!, NotificationType.DRAW_RESULT)!!.status ==
+              NotificationStatus.PENDING
         }
     )
-    assertNotNull(service.detail(detail.id, alice.user!!.id.toString()).myRecipient)
+    assertTrue(
+        members.all {
+          notifications.findBySsPlayerIdAndType(it.id!!, NotificationType.REGISTRATION)!!.status ==
+              NotificationStatus.CANCELLED
+        }
+    )
+    val afterDraw = service.detail(detail.id, alice.user!!.id.toString())
+    assertNotNull(afterDraw.myRecipient)
+    assertEquals(NotificationStatus.PENDING.name, afterDraw.notificationStatus)
     assertEquals(
         403,
         assertThrows(ResponseStatusException::class.java) {
@@ -101,6 +148,83 @@ class SecretSantaPersistenceTest {
     )
     assertFalse(
         service.all(outsider.user!!.id.toString()).first { it.id == detail.id }.isParticipant
+    )
+  }
+
+  @Test
+  fun `guest invite enrollment queues a notice for the new participant`() {
+    val alice = player("inviteAlice")
+    val bob = player("inviteBob")
+    val detail =
+        service.create(
+            alice.user!!.id.toString(),
+            CreateSecretSanta("Invite draw", Instant.now().plusSeconds(3600), listOf(bob.id!!)),
+        )
+    service.joinByInvite(detail.inviteToken, InviteRegistration("Guest", "+5511977777777"))
+    val guest = players.findByPhoneNumber("+5511977777777")!!
+    val membership = entries.findBySsListIdAndPlayerId(detail.id, guest.id!!)!!
+    val notice =
+        notifications.findBySsPlayerIdAndType(membership.id!!, NotificationType.REGISTRATION)!!
+    assertEquals("Invite draw", notice.groupName)
+    assertEquals(guest.phoneNumber, notice.phone)
+    assertEquals(detail.drawAt, notice.scheduledDrawAt)
+    assertEquals("", notice.recipientName)
+    assertEquals(3L, notifications.count())
+  }
+
+  @Test
+  fun `closed invite join returns a clear conflict message`() {
+    val alice = player("closedInviteAlice")
+    val bob = player("closedInviteBob")
+    val detail =
+        service.create(
+            alice.user!!.id.toString(),
+            CreateSecretSanta(
+                "Closed invite draw",
+                Instant.now().plusSeconds(3600),
+                listOf(bob.id!!),
+            ),
+        )
+    val list = lists.findById(detail.id).orElseThrow()
+    list.status = DrawStatus.DRAWN
+    lists.saveAndFlush(list)
+
+    mvc.perform(
+            post("/api/v1/secret-santas/invites/${detail.inviteToken}/join")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"name":"Guest","phoneNumber":"+5511977777777"}"""),
+        )
+        .andExpect(status().isConflict)
+        .andExpect(
+            jsonPath("$.message")
+                .value(
+                    "This invite is closed. Players can only join a scheduled draw before its draw time."
+                ),
+        )
+  }
+
+  @Test
+  fun `leaving removes that membership outbox rows before deleting it`() {
+    val alice = player("leaveAlice")
+    val bob = player("leaveBob")
+    val clara = player("leaveClara")
+    val detail =
+        service.create(
+            alice.user!!.id.toString(),
+            CreateSecretSanta(
+                "Leave draw",
+                Instant.now().plusSeconds(3600),
+                listOf(bob.id!!, clara.id!!),
+            ),
+        )
+    val bobMembership = entries.findBySsListIdAndPlayerId(detail.id, bob.id!!)!!
+    assertEquals(3L, notifications.count())
+    service.leave(detail.id, bob.user!!.id.toString())
+    assertNull(entries.findBySsListIdAndPlayerId(detail.id, bob.id!!))
+    assertEquals(2L, notifications.count())
+    assertNull(
+        notifications.findBySsPlayerIdAndType(bobMembership.id!!, NotificationType.REGISTRATION)
     )
   }
 

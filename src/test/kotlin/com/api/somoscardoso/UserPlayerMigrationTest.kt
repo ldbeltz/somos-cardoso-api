@@ -87,10 +87,27 @@ class UserPlayerMigrationTest {
               assertEquals(41L, it.getLong(2))
               assertFalse(it.next())
             }
-        sql.executeQuery("SELECT phone,status FROM whatsapp_notifications WHERE id=31").use {
+        sql.executeQuery(
+                "SELECT phone,status,type,scheduled_draw_at FROM whatsapp_notifications WHERE id=31"
+            )
+            .use {
+              it.next()
+              assertEquals("+5511999999999", it.getString(1))
+              assertEquals("SENT", it.getString(2))
+              assertEquals("DRAW_RESULT", it.getString(3))
+              assertNull(it.getTimestamp(4))
+            }
+        sql.executeUpdate(
+            "INSERT INTO whatsapp_notifications(ss_player_id,phone,group_name,recipient_name,status,attempts,next_attempt_at,type,scheduled_draw_at) VALUES(21,'+5511999999999','Legacy draw','','PENDING',0,'2026-12-01 12:00:02','REGISTRATION','2026-12-24 12:00:00')"
+        )
+        sql.executeQuery("SELECT COUNT(*) FROM whatsapp_notifications WHERE ss_player_id=21").use {
           it.next()
-          assertEquals("+5511999999999", it.getString(1))
-          assertEquals("SENT", it.getString(2))
+          assertEquals(2, it.getInt(1))
+        }
+        assertThrows(java.sql.SQLException::class.java) {
+          sql.executeUpdate(
+              "INSERT INTO whatsapp_notifications(ss_player_id,phone,group_name,recipient_name,status,attempts,next_attempt_at,type,scheduled_draw_at) VALUES(21,'+5511999999999','Duplicate','','PENDING',0,'2026-12-01 12:00:02','REGISTRATION','2026-12-24 12:00:00')"
+          )
         }
         sql.executeQuery(
                 "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='migration_test' AND TABLE_NAME='players'"

@@ -18,9 +18,12 @@ The worker locks the SSList row, securely shuffles the players, copies the order
 into a java.util.LinkedList, and stores the next player's ID as each recipient.
 The last points to the first. This creates one closed ring, with one giver and
 one recipient for each player and no self-matches. The same transaction stores
-a durable WhatsApp outbox message per assignment and marks the draw complete.
-Database locks and the DRAWN state prevent redrawing and serialize registration
-against the scheduled draw. The outbox has a unique key per assignment.
+a durable WhatsApp result message per assignment and marks the draw complete.
+Each new membership also creates an enrollment confirmation in the same
+transaction. Database locks and the DRAWN state prevent redrawing and serialize
+enrollment against the scheduled draw. Each membership may have one row per
+notification type; leaving removes that membership's outbox rows before the
+membership itself is deleted.
 
 A player may see their own recipient once drawn, never another player's recipient.
 The family can browse safe draw summaries; full membership/detail requires joining.
@@ -31,6 +34,10 @@ All routes require authenticated sessions and state-changing requests require CS
 
 - GET /api/v1/secret-santas: summaries with id, name, drawAt, status, creatorId,
   playerCount, isParticipant.
+- GET /api/v1/secret-santas/invites/{token}: public invite details with name,
+  drawAt, and status.
+- POST /api/v1/secret-santas/invites/{token}/join: JSON name and phoneNumber;
+  registers a guest and returns name, drawAt, and status (201).
 - POST /api/v1/secret-santas: JSON name, drawAt, playerIds; returns 201 detail.
 - GET /api/v1/secret-santas/{id}: participant-only detail with summary fields,
   players (id/name only), myRecipient or null, and the current player's
@@ -39,19 +46,26 @@ All routes require authenticated sessions and state-changing requests require CS
 - DELETE /api/v1/secret-santas/{id}/players/me: leaves before cutoff; returns 204.
 
 Draw status is SCHEDULED, DRAWN, or NOT_DRAWN. A due draw with fewer than two
-players becomes NOT_DRAWN and does not create assignments or notifications.
-Notification status is PENDING, SENDING, or
-SENT. SENT means the WhatsApp API accepted the request; it is not a delivery
-receipt. Without credentials, the draw still takes place and messages remain
-PENDING until the provider is enabled. No recipients are logged.
+players becomes NOT_DRAWN and does not create assignments or result messages.
+Notification status is PENDING, SENDING, SENT, or CANCELLED. Enrollment rows
+that have not been sent are canceled at draw time and cannot be claimed once the
+schedule arrives. SENT means the WhatsApp API accepted the request; it is not a
+delivery receipt. Without credentials, the draw still takes place and pending
+result rows remain until the provider is enabled; stale enrollment rows are
+canceled. Enrollment messages contain no recipient assignment.
 
 ## WhatsApp setup
 
 The adapter uses the official Meta WhatsApp Cloud API. Prepare a sender phone
-number ID, server-side access token, and an approved text template with exactly
-two body text parameters in this order: draw name, recipient name. For example:
-"Your Secret Santa in {{1}} is {{2}}." Use the template's actual language code.
-Obtain recipient permission to send their draw notification before enrolling them.
+number ID and server-side access token. Results use `{{1}}` = draw name and
+`{{2}}` = recipient name. Enrollment uses the independent
+`amigo_secreto_inscricao` template, language `pt_PT`, with `{{1}}` = draw name
+and `{{2}}` = scheduled time formatted `dd/MM/yyyy HH:mm` in `America/Maceio`
+by default. The timezone is configurable. New memberships are confirmed when a
+draw is created, an account joins, or a guest uses an invite; unchanged
+memberships do not enqueue another notice. There is no draw schedule update
+endpoint. Obtain participants' permission before enabling either message type.
+The enrollment template body is: `Olá, você está inscrito no amigo secreto *{{1}}* 🎉. Iremos realizar o sorteio no dia *{{2}}*. Não se preocupe, te avisamos por aqui o resultado 😉.` Its fixed text header is `Inscrição Amigo Secreto` and has no dynamic header parameters.
 
 Spring configuration properties:
 
@@ -61,10 +75,17 @@ Spring configuration properties:
 - app.whatsapp.api-version (v23.0 default; configurable for the provider account)
 - app.whatsapp.template-name
 - app.whatsapp.template-language (en_US by default)
+- app.whatsapp.registration.enabled (false by default; requires master switch)
+- app.whatsapp.registration.template-name (amigo_secreto_inscricao)
+- app.whatsapp.registration.template-language (pt_PT)
+- app.whatsapp.registration.time-zone (America/Maceio)
 - app.whatsapp.poll-ms (15000 by default)
 - app.draw.poll-ms (15000 by default)
 
-Enable the adapter only with the actual approved template and valid credentials.
+`WHATSAPP_ENABLED` is the master switch for all sends. Registration also
+requires `WHATSAPP_REGISTRATION_ENABLED=true`; missing registration settings do
+not block result delivery. Keep delivery disabled until the relevant template
+is approved and credentials are valid.
 The provider sends POST /{version}/{phone-number-id}/messages with a template body.
 Request format reference: [Meta's WhatsApp Business Platform collection](https://www.postman.com/meta/whatsapp-business-platform/request/o65u5m5/send-message-template-text).
 

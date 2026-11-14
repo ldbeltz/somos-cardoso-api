@@ -130,6 +130,33 @@ class SecretSantaServiceTest {
   }
 
   @Test
+  fun `invite join rejects draws that are no longer scheduled with a clear message`() {
+    for (status in listOf(DrawStatus.DRAWN, DrawStatus.NOT_DRAWN)) {
+      `when`(lists.findByInviteToken("closed-token"))
+          .thenReturn(
+              SecretSantaList(
+                  id = 9,
+                  drawAt = now.plusSeconds(60),
+                  status = status,
+                  inviteToken = "closed-token",
+              )
+          )
+
+      val error =
+          assertThrows(ResponseStatusException::class.java) {
+            service.joinByInvite("closed-token", InviteRegistration("Guest", "+5511977777777"))
+          }
+
+      assertEquals(409, error.statusCode.value())
+      assertEquals(
+          "This invite is closed. Players can only join a scheduled draw before its draw time.",
+          error.reason,
+      )
+    }
+    verifyNoInteractions(players, entries, notifications)
+  }
+
+  @Test
   fun `creator cannot leave and a draw cannot fall below two players`() {
     `when`(lists.lockById(9))
         .thenReturn(SecretSantaList(id = 9, drawAt = now.plusSeconds(60), creatorId = 1))
