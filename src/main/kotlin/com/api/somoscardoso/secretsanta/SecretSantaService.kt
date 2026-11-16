@@ -16,21 +16,33 @@ import org.springframework.web.server.ResponseStatusException
 data class CreateSecretSanta(
     val name: String,
     val drawAt: Instant,
-    val playerIds: List<Long> = emptyList(),
+    val playerIds: List<UUID> = emptyList(),
 )
+
+data class ChangeDrawDate(val drawAt: Instant)
+
+data class AddSecretSantaPlayer(val playerId: UUID)
 
 data class InviteRegistration(val name: String, val phoneNumber: String)
 
-data class InviteInfo(val name: String, val drawAt: Instant, val status: DrawStatus)
+data class InviteInfo(
+    val id: Long,
+    val name: String,
+    val drawAt: Instant,
+    val status: DrawStatus,
+    val secretWord: String? = null,
+)
 
-data class PlayerName(val id: Long, val name: String)
+data class RevealRecipientRequest(val word: String)
+
+data class PlayerName(val id: UUID, val name: String)
 
 data class SecretSantaSummary(
     val id: Long,
     val name: String,
     val drawAt: Instant,
     val status: DrawStatus,
-    val creatorId: Long,
+    val creatorId: UUID,
     val playerCount: Int,
     val isParticipant: Boolean,
 )
@@ -40,11 +52,12 @@ data class SecretSantaDetail(
     val name: String,
     val drawAt: Instant,
     val status: DrawStatus,
-    val creatorId: Long,
+    val creatorId: UUID,
     val playerCount: Int,
     val isParticipant: Boolean,
     val players: List<PlayerName>,
     val myRecipient: PlayerName?,
+    val secretWord: String?,
     val notificationStatus: String?,
     val inviteToken: String,
 )
@@ -58,6 +71,7 @@ class SecretSantaService(
     private val notifications: WhatsAppNotificationRepository,
     private val draw: CircularDraw,
     private val clock: Clock,
+    private val wordPool: SecretSantaWordRepository? = null,
 ) {
   private fun fail(status: HttpStatus, message: String): Nothing =
       throw ResponseStatusException(status, message)
@@ -88,12 +102,31 @@ class SecretSantaService(
         fail(HttpStatus.BAD_REQUEST, "Every player needs a valid WhatsApp number before joining")
   }
 
+  private fun availableWords(): List<String> =
+      wordPool
+          ?.findAll()
+          ?.map { it.word }
+          ?.distinctBy { it.lowercase() }
+          ?.takeIf { it.isNotEmpty() }
+          ?: listOf("abacate", "alecrim", "amora", "arara", "brisa", "caju", "canela", "capivara")
+
+  private fun assignWords(count: Int, alreadyUsed: Set<String> = emptySet()): List<String> {
+    val used = alreadyUsed.map { it.lowercase() }.toSet()
+    val available = availableWords().filter { it.lowercase() !in used }.shuffled()
+    if (available.size < count)
+        fail(HttpStatus.CONFLICT, "No unique secret words remain for this draw")
+    return available.take(count)
+  }
+
   @Transactional(readOnly = true)
   fun all(email: String): List<SecretSantaSummary> {
-    val me = player(email).id!!
+    val me = player(email).id
     return lists
         .findAll()
         .sortedBy { it.drawAt }
+        .filter { list ->
+          list.creatorId == me || entries.findBySsListIdAndPlayerId(list.id!!, me) != null
+        }
         .map { list ->
           val members = entries.findAllBySsListIdOrderByIdAsc(list.id!!)
           SecretSantaSummary(
@@ -115,28 +148,39 @@ class SecretSantaService(
         fail(HttpStatus.BAD_REQUEST, "Name must contain 1 to 120 characters")
     if (!request.drawAt.isAfter(clock.instant()))
         fail(HttpStatus.BAD_REQUEST, "Choose a future date and time")
-    if (request.playerIds.size > 500)
-        fail(HttpStatus.BAD_REQUEST, "A draw supports at most 500 players")
+    if (request.playerIds.size > 100)
+        fail(HttpStatus.BAD_REQUEST, "A draw supports at most 100 players")
     if (request.playerIds.distinct().size != request.playerIds.size)
         fail(HttpStatus.BAD_REQUEST, "Players must be distinct")
-    val ids = (request.playerIds + me.id!!).distinct()
-    if (ids.size > 500) fail(HttpStatus.BAD_REQUEST, "A draw supports at most 500 players")
+    val requested = players.findAllById(request.playerIds)
+    if (requested.size != request.playerIds.size)
+        fail(HttpStatus.BAD_REQUEST, "One or more players do not exist")
+    val selected = (requested + me).distinctBy { it.id }
+    val ids = selected.map { it.id }
+    if (ids.size > 100) fail(HttpStatus.BAD_REQUEST, "A draw supports at most 100 players")
     if (ids.isEmpty()) fail(HttpStatus.BAD_REQUEST, "The creator must participate")
-    val selected = players.findAllById(ids)
-    if (selected.size != ids.size) fail(HttpStatus.BAD_REQUEST, "One or more players do not exist")
     selected.forEach(::validPhone)
     val list =
         lists.saveAndFlush(
             SecretSantaList(
                 name = name,
                 drawAt = request.drawAt,
-                creatorId = me.id!!,
+                creatorId = me.id,
                 inviteToken = UUID.randomUUID().toString().replace("-", ""),
             )
         )
+    val secretWords = assignWords(ids.size)
     val memberships =
-        entries.saveAll(ids.map { SecretSantaPlayer(ssListId = list.id!!, playerId = it) })
-    val directory = selected.associateBy { it.id!! }
+        entries.saveAll(
+            ids.mapIndexed { index, playerId ->
+              SecretSantaPlayer(
+                  ssListId = list.id!!,
+                  playerId = playerId,
+                  secretWord = secretWords[index],
+              )
+            }
+        )
+    val directory = selected.associateBy { it.id }
     notifications.saveAll(
         memberships.map { registrationNotification(it, list, directory.getValue(it.playerId)) }
     )
@@ -146,11 +190,12 @@ class SecretSantaService(
   @Transactional(readOnly = true)
   fun inviteInfo(token: String): InviteInfo {
     val list = lists.findByInviteToken(token) ?: fail(HttpStatus.NOT_FOUND, "Invite not found")
-    return InviteInfo(list.name, list.drawAt, list.status)
+    return InviteInfo(list.id!!, list.name, list.drawAt, list.status)
   }
 
   fun joinByInvite(token: String, request: InviteRegistration): InviteInfo {
-    val list = lists.findByInviteToken(token) ?: fail(HttpStatus.NOT_FOUND, "Invite not found")
+    val found = lists.findByInviteToken(token) ?: fail(HttpStatus.NOT_FOUND, "Invite not found")
+    val list = locked(found.id!!)
     editable(list)
     val name = request.name.trim()
     if (name.length !in 1..100)
@@ -159,27 +204,41 @@ class SecretSantaService(
     val existing = players.findByPhoneNumber(phone)
     val guest = existing ?: players.save(Player(name = name, phoneNumber = phone))
     if (existing != null && guest.name.isBlank()) guest.name = name
-    if (entries.findBySsListIdAndPlayerId(list.id!!, guest.id!!) != null)
+    if (entries.findBySsListIdAndPlayerId(list.id!!, guest.id) != null)
         fail(HttpStatus.CONFLICT, "This phone number is already registered in this draw")
-    if (entries.countBySsListId(list.id!!) >= 500) fail(HttpStatus.CONFLICT, "This draw is full")
-    val membership = entries.save(SecretSantaPlayer(ssListId = list.id!!, playerId = guest.id!!))
+    if (entries.countBySsListId(list.id!!) >= 100) fail(HttpStatus.CONFLICT, "This draw is full")
+    val usedWords =
+        entries.findAllBySsListIdOrderByIdAsc(list.id!!).mapNotNull { it.secretWord }.toSet()
+    val word = assignWords(1, usedWords).single()
+    val membership =
+        entries.save(
+            SecretSantaPlayer(ssListId = list.id!!, playerId = guest.id, secretWord = word)
+        )
     notifications.save(registrationNotification(membership, list, guest))
-    return InviteInfo(list.name, list.drawAt, status = list.status)
+    return InviteInfo(list.id!!, list.name, list.drawAt, status = list.status, secretWord = word)
   }
 
-  @Transactional(readOnly = true)
   fun detail(id: Long, email: String): SecretSantaDetail {
     val me = player(email)
-    val list =
-        lists.findById(id).orElseThrow {
-          ResponseStatusException(HttpStatus.NOT_FOUND, "Secret Santa not found")
-        }
+    val list = locked(id)
     val members = entries.findAllBySsListIdOrderByIdAsc(id)
-    val mine =
-        members.firstOrNull { it.playerId == me.id }
-            ?: fail(HttpStatus.FORBIDDEN, "Only registered players can view this Secret Santa")
-    val directory = players.findAllById(members.map { it.playerId }).associateBy { it.id!! }
-    val recipient = mine.recipientId?.let { directory[it] }?.let { PlayerName(it.id!!, it.name) }
+    val mine = members.firstOrNull { it.playerId == me.id }
+    if (mine == null && list.creatorId != me.id)
+        fail(HttpStatus.FORBIDDEN, "Only participants or the creator can view this Secret Santa")
+    val directory = players.findAllById(members.map { it.playerId }).associateBy { it.id }
+    val recipient = mine?.recipientId?.let { directory[it] }?.let { PlayerName(it.id, it.name) }
+    val secretWord = mine?.let { membership ->
+      membership.secretWord
+          ?: assignWords(
+                  1,
+                  members.filter { it.id != membership.id }.mapNotNull { it.secretWord }.toSet(),
+              )
+              .single()
+              .also {
+                membership.secretWord = it
+                entries.save(membership)
+              }
+    }
     return SecretSantaDetail(
         id,
         list.name,
@@ -187,15 +246,76 @@ class SecretSantaService(
         list.status,
         list.creatorId,
         members.size,
-        true,
-        members.map { PlayerName(it.playerId, directory.getValue(it.playerId).name) },
+        mine != null,
+        members.map {
+          val member = directory.getValue(it.playerId)
+          PlayerName(member.id, member.name)
+        },
         recipient,
-        notifications
-            .findBySsPlayerIdAndType(mine.id!!, NotificationType.DRAW_RESULT)
+        secretWord,
+        mine
+            ?.let { notifications.findBySsPlayerIdAndType(it.id!!, NotificationType.DRAW_RESULT) }
             ?.status
             ?.name,
         list.inviteToken,
     )
+  }
+
+  fun changeDrawDate(id: Long, request: ChangeDrawDate) {
+    val list = locked(id)
+    editable(list)
+    if (!request.drawAt.isAfter(clock.instant()))
+        fail(HttpStatus.BAD_REQUEST, "Choose a future date and time")
+    list.drawAt = request.drawAt
+    lists.save(list)
+    entries.findAllBySsListIdOrderByIdAsc(id).forEach { member ->
+      notifications.findBySsPlayerIdAndType(member.id!!, NotificationType.REGISTRATION)?.let {
+          notice ->
+        if (notice.status != com.api.somoscardoso.messaging.NotificationStatus.SENT) {
+          notice.scheduledDrawAt = request.drawAt
+          notifications.save(notice)
+        }
+      }
+    }
+  }
+
+  fun addPlayer(id: Long, playerId: UUID) {
+    val list = locked(id)
+    editable(list)
+    val player =
+        players.findById(playerId).orElseThrow {
+          ResponseStatusException(HttpStatus.NOT_FOUND, "Player not found")
+        }
+    if (entries.findBySsListIdAndPlayerId(id, playerId) != null)
+        fail(HttpStatus.CONFLICT, "Player is already registered in this draw")
+    if (entries.countBySsListId(id) >= 100) fail(HttpStatus.CONFLICT, "This draw is full")
+    validPhone(player)
+    val usedWords = entries.findAllBySsListIdOrderByIdAsc(id).mapNotNull { it.secretWord }.toSet()
+    val secretWord = assignWords(1, usedWords).single()
+    val membership =
+        entries.saveAndFlush(
+            SecretSantaPlayer(ssListId = id, playerId = playerId, secretWord = secretWord)
+        )
+    notifications.save(registrationNotification(membership, list, player))
+  }
+
+  fun removePlayer(id: Long, playerId: UUID) {
+    val list = locked(id)
+    editable(list)
+    val entry =
+        entries.findBySsListIdAndPlayerId(id, playerId)
+            ?: fail(HttpStatus.NOT_FOUND, "Player is not registered in this draw")
+    notifications.deleteAllBySsPlayerId(entry.id!!)
+    entries.delete(entry)
+  }
+
+  fun delete(id: Long) {
+    locked(id)
+    entries.findAllBySsListIdOrderByIdAsc(id).forEach { member ->
+      notifications.deleteAllBySsPlayerId(member.id!!)
+      entries.delete(member)
+    }
+    lists.deleteById(id)
   }
 
   fun join(id: Long, email: String): SecretSantaDetail {
@@ -203,24 +323,48 @@ class SecretSantaService(
     editable(list)
     val me = player(email)
     validPhone(me)
-    if (entries.findBySsListIdAndPlayerId(id, me.id!!) == null) {
-      if (entries.countBySsListId(id) >= 500) fail(HttpStatus.CONFLICT, "This draw is full")
-      val membership = entries.saveAndFlush(SecretSantaPlayer(ssListId = id, playerId = me.id!!))
+    if (entries.findBySsListIdAndPlayerId(id, me.id) == null) {
+      if (entries.countBySsListId(id) >= 100) fail(HttpStatus.CONFLICT, "This draw is full")
+      val usedWords = entries.findAllBySsListIdOrderByIdAsc(id).mapNotNull { it.secretWord }.toSet()
+      val secretWord = assignWords(1, usedWords).single()
+      val membership =
+          entries.saveAndFlush(
+              SecretSantaPlayer(ssListId = id, playerId = me.id, secretWord = secretWord)
+          )
       notifications.save(registrationNotification(membership, list, me))
     }
     return detail(id, email)
+  }
+
+  @Transactional(readOnly = true)
+  fun revealRecipient(id: Long, request: RevealRecipientRequest): PlayerName {
+    val list =
+        lists.findById(id).orElseThrow {
+          ResponseStatusException(HttpStatus.NOT_FOUND, "Secret Santa not found")
+        }
+    if (list.status != DrawStatus.DRAWN)
+        fail(HttpStatus.CONFLICT, "The recipient can only be revealed after the draw")
+    val word = request.word.trim().lowercase()
+    if (word.isBlank()) fail(HttpStatus.BAD_REQUEST, "Enter your secret word")
+    val membership =
+        entries.findBySsListIdAndSecretWord(id, word)
+            ?: fail(HttpStatus.FORBIDDEN, "The secret word is incorrect")
+    val recipientId =
+        membership.recipientId ?: fail(HttpStatus.CONFLICT, "Recipient is not available")
+    val recipient =
+        players.findById(recipientId).orElseThrow {
+          ResponseStatusException(HttpStatus.NOT_FOUND, "Recipient not found")
+        }
+    return PlayerName(recipient.id, recipient.name)
   }
 
   fun leave(id: Long, email: String) {
     val list = locked(id)
     editable(list)
     val me = player(email)
-    if (list.creatorId == me.id) fail(HttpStatus.CONFLICT, "The creator must stay in the draw")
     val entry =
-        entries.findBySsListIdAndPlayerId(id, me.id!!)
+        entries.findBySsListIdAndPlayerId(id, me.id)
             ?: fail(HttpStatus.NOT_FOUND, "You are not registered in this draw")
-    if (entries.countBySsListId(id) <= 2)
-        fail(HttpStatus.CONFLICT, "At least two players must remain")
     notifications.deleteAllBySsPlayerId(entry.id!!)
     entries.delete(entry)
   }
@@ -246,7 +390,7 @@ class SecretSantaService(
       lists.save(list)
       return true
     }
-    val directory = players.findAllById(members.map { it.playerId }).associateBy { it.id!! }
+    val directory = players.findAllById(members.map { it.playerId }).associateBy { it.id }
     val assignments = draw.assign(members.map { it.playerId })
     members.forEach { entry ->
       entry.recipientId = assignments.getValue(entry.playerId)

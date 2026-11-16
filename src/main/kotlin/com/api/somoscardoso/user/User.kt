@@ -16,4 +16,7 @@ class User(
     @Column(name = "phone_number", length = 16, unique = true) var phoneNumber: String? = null,
     @Column(name = "password_hash") var passwordHash: String? = null,
     @Column(name = "google_subject", unique = true) var googleSubject: String? = null,
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    var role: UserRole = UserRole.USER,
 )

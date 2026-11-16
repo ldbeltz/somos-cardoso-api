@@ -19,6 +19,8 @@ class UserPlayerMigrationTest {
   @Test
   fun `V3 preserves legacy credentials phones player IDs and Secret Santa assignments`() {
     val originalHash = BCryptPasswordEncoder().encode("existing password")
+    val anaId = "11000000-0000-0000-0000-000000000041"
+    val googleId = "22000000-0000-0000-0000-000000000042"
     Flyway.configure()
         .dataSource(mysql.jdbcUrl, mysql.username, mysql.password)
         .target("2")
@@ -27,7 +29,7 @@ class UserPlayerMigrationTest {
     DriverManager.getConnection(mysql.jdbcUrl, mysql.username, mysql.password).use { connection ->
       connection
           .prepareStatement(
-              "INSERT INTO players(id,name,email,whatsapp_phone,password_hash,google_subject) VALUES(41,'Legacy Ana','ana@legacy.test','+5511999999999',?,NULL),(42,'Legacy Google','google@legacy.test','+14155552671',NULL,'provider-subject')"
+              "INSERT INTO players(id,name,email,whatsapp_phone,password_hash,google_subject) VALUES('$anaId','Legacy Ana','ana@legacy.test','+5511999999999',?,NULL),('$googleId','Legacy Google','google@legacy.test','+14155552671',NULL,'provider-subject')"
           )
           .use {
             it.setString(1, originalHash)
@@ -35,10 +37,10 @@ class UserPlayerMigrationTest {
           }
       connection.createStatement().use { sql ->
         sql.executeUpdate(
-            "INSERT INTO ss_lists(id,name,draw_at,creator_id,status,drawn_at) VALUES(11,'Legacy draw','2026-12-01 12:00:00',41,'DRAWN','2026-12-01 12:00:01')"
+            "INSERT INTO ss_lists(id,name,draw_at,creator_id,status,drawn_at) VALUES(11,'Legacy draw','2026-12-01 12:00:00','$anaId','DRAWN','2026-12-01 12:00:01')"
         )
         sql.executeUpdate(
-            "INSERT INTO ss_players(id,ss_list_id,player_id,recipient_id) VALUES(21,11,41,42),(22,11,42,41)"
+            "INSERT INTO ss_players(id,ss_list_id,player_id,recipient_id) VALUES(21,11,'$anaId','$googleId'),(22,11,'$googleId','$anaId')"
         )
         sql.executeUpdate(
             "INSERT INTO whatsapp_notifications(id,ss_player_id,phone,group_name,recipient_name,status,attempts,next_attempt_at) VALUES(31,21,'+5511999999999','Legacy draw','Legacy Google','SENT',1,'2026-12-01 12:00:02')"
@@ -53,7 +55,7 @@ class UserPlayerMigrationTest {
             )
             .use { rows ->
               assertTrue(rows.next())
-              assertEquals(41L, rows.getLong("id"))
+              assertEquals(anaId, rows.getString("id"))
               assertEquals("Legacy Ana", rows.getString("name"))
               val first = UUID.fromString(rows.getString("user_id"))
               assertEquals("+5511999999999", rows.getString("phone_number"))
@@ -64,7 +66,7 @@ class UserPlayerMigrationTest {
                       .matches("existing password", rows.getString("password_hash"))
               )
               assertTrue(rows.next())
-              assertEquals(42L, rows.getLong("id"))
+              assertEquals(googleId, rows.getString("id"))
               assertNotEquals(first, UUID.fromString(rows.getString("user_id")))
               assertEquals("+14155552671", rows.getString("phone_number"))
               assertEquals("provider-subject", rows.getString("google_subject"))
@@ -73,18 +75,18 @@ class UserPlayerMigrationTest {
             }
         sql.executeQuery("SELECT creator_id FROM secret_santa_lists WHERE id=11").use {
           it.next()
-          assertEquals(41L, it.getLong(1))
+          assertEquals(anaId, it.getString(1))
         }
         sql.executeQuery(
                 "SELECT player_id,recipient_id FROM secret_santa_players WHERE ss_list_id=11 ORDER BY id"
             )
             .use {
               assertTrue(it.next())
-              assertEquals(41L, it.getLong(1))
-              assertEquals(42L, it.getLong(2))
+              assertEquals(anaId, it.getString(1))
+              assertEquals(googleId, it.getString(2))
               assertTrue(it.next())
-              assertEquals(42L, it.getLong(1))
-              assertEquals(41L, it.getLong(2))
+              assertEquals(googleId, it.getString(1))
+              assertEquals(anaId, it.getString(2))
               assertFalse(it.next())
             }
         sql.executeQuery(
@@ -124,7 +126,7 @@ class UserPlayerMigrationTest {
             }
         assertThrows(java.sql.SQLException::class.java) {
           sql.executeUpdate(
-              "UPDATE players SET user_id='00000000-0000-0000-0000-000000000000' WHERE id=41"
+              "UPDATE players SET user_id='00000000-0000-0000-0000-000000000000' WHERE id='$anaId'"
           )
         }
       }

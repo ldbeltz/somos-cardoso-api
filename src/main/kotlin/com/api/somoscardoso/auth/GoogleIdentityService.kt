@@ -5,6 +5,7 @@ import com.api.somoscardoso.player.PlayerRepository
 import com.api.somoscardoso.user.User
 import com.api.somoscardoso.user.UserRepository
 import org.springframework.security.core.GrantedAuthority
+import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserRequest
 import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException
@@ -45,7 +46,7 @@ class GoogleAccountService(
       )
     }
     return LocalGooglePrincipal(
-        remote.authorities,
+        listOf(SimpleGrantedAuthority("ROLE_${user.role.name}")),
         remote.idToken,
         remote.userInfo,
         user.id.toString(),

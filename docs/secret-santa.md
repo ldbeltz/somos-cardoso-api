@@ -2,17 +2,26 @@
 
 ## Behavior
 
-Every authenticated user may create a draw. A draw is created with a name,
+Only users with the ADMIN role may create, update, or delete a draw. New accounts
+have the USER role; promote administrators by setting `users.role` to `ADMIN`.
+A draw is created with a name,
 a future UTC instant, and at least two distinct registered players including
 the creator. All selected players must already have a WhatsApp number in E.164
 format. The creator is included automatically if omitted. Registration stays
-open until the scheduled instant. Leaving cannot reduce a draw below two players;
-the creator remains a player. An initial capacity of 500 players bounds requests.
+open until the scheduled instant. Players, including the creator, can leave before
+the draw; admins can remove any player before the draw. An initial capacity of
+100 players bounds requests because the Brazilian Portuguese word pool contains
+100 distinct words. Draws with fewer than two players are not drawn.
 
 A scheduled worker checks persistent due draws every 15 seconds. If the server
 was offline at the draw instant, the draw is picked up after restart. Scheduling
 therefore happens at or shortly after the selected instant, rather than with
 hard real-time precision.
+
+Each membership receives a private word selected from a pool of 100 Brazilian
+Portuguese words. Words are unique within each draw. The participant's
+word is returned only in their own join/detail response. After the draw, the player
+can reveal their recipient by submitting that word.
 
 The worker locks the SSList row, securely shuffles the players, copies the order
 into a java.util.LinkedList, and stores the next player's ID as each recipient.
@@ -26,24 +35,36 @@ notification type; leaving removes that membership's outbox rows before the
 membership itself is deleted.
 
 A player may see their own recipient once drawn, never another player's recipient.
-The family can browse safe draw summaries; full membership/detail requires joining.
+Players can list and view only draws they participate in or created. Public invite
+details remain available to anyone with the invite token.
 
 ## API
 
-All routes require authenticated sessions and state-changing requests require CSRF.
+Routes require authenticated sessions except public invite routes and the word-based
+recipient reveal route. State-changing requests require CSRF.
 
-- GET /api/v1/secret-santas: summaries with id, name, drawAt, status, creatorId,
+- GET /api/v1/secret-santas: summaries for draws the current player participates
+  in or created, with id, name, drawAt, status, creatorId,
   playerCount, isParticipant.
-- GET /api/v1/secret-santas/invites/{token}: public invite details with name,
-  drawAt, and status.
+- GET /api/v1/secret-santas/invites/{token}: public invite details with numeric
+  draw id, name, drawAt, and status.
 - POST /api/v1/secret-santas/invites/{token}/join: JSON name and phoneNumber;
-  registers a guest and returns name, drawAt, and status (201).
-- POST /api/v1/secret-santas: JSON name, drawAt, playerIds; returns 201 detail.
-- GET /api/v1/secret-santas/{id}: participant-only detail with summary fields,
-  players (id/name only), myRecipient or null, and the current player's
+  registers a guest and returns numeric draw id, name, drawAt, status, and the
+  guest's secretWord (201). Use the id with the word-based reveal endpoint.
+- POST /api/v1/secret-santas: ADMIN only; JSON name, drawAt, playerIds (player UUIDs);
+  returns 201 detail.
+- GET /api/v1/secret-santas/{id}: participant or creator detail with summary fields,
+  players (UUID id/name only), the current participant's secretWord, myRecipient
+  (the current player's recipient after the draw), and the current player's
   notificationStatus or null.
+- POST /api/v1/secret-santas/{id}/reveal: JSON `{ "word": "..." }`; the secret
+  word proves membership and returns its owner's recipient after the draw.
 - POST /api/v1/secret-santas/{id}/join: joins before the cutoff; returns detail.
 - DELETE /api/v1/secret-santas/{id}/players/me: leaves before cutoff; returns 204.
+- PUT /api/v1/secret-santas/{id}: ADMIN only; JSON drawAt changes the scheduled draw date.
+- POST /api/v1/secret-santas/{id}/players: ADMIN only; JSON playerId (UUID) adds a player.
+- DELETE /api/v1/secret-santas/{id}/players/{playerId}: ADMIN only; playerId is a UUID.
+- DELETE /api/v1/secret-santas/{id}: ADMIN only; removes the draw and its memberships.
 
 Draw status is SCHEDULED, DRAWN, or NOT_DRAWN. A due draw with fewer than two
 players becomes NOT_DRAWN and does not create assignments or result messages.
@@ -110,8 +131,9 @@ Tests use mock senders and never send live WhatsApp messages.
 
 User owns authentication (UUID id, email, password hash, Google subject). Player
 owns the family display name and phoneNumber, and has a unique user_id foreign
-key to its User. Player numeric IDs remain stable for Secret Santa membership
-and recipient relationships. The API returns id (player ID), userId (UUID), name,
+key to its User. Player IDs are UUIDs and are used in membership and recipient
+relationships as well as API responses. The API returns id (player UUID),
+userId (account UUID), name,
 email and phoneNumber. Authentication principals use the User UUID.
 
 Registration and profile updates accept formatted Brazilian national numbers
@@ -121,11 +143,16 @@ their country code. All numbers are stored in E.164 format. Existing phone
 values are copied unchanged by V3; Google profiles may have no number until
 updated. The request/response field is phoneNumber throughout the API.
 
-V1 and V2 are unchanged. V3 backfills a unique UUID per existing account, copies
-credentials into users, links players, and renames whatsapp_phone to phone_number.
-It keeps player IDs, draws, assignments and notification jobs intact. Back up
-the database and deploy matching backend/frontend versions together. V3 removes
+Fresh V1/V2 schemas use UUID primary keys for players and UUID foreign keys in
+Secret Santa memberships, recipients, and creators. V3 backfills a unique UUID
+per account, copies credentials into users, links players, and renames
+whatsapp_phone to phone_number. V3 keeps player IDs, draws, assignments, and
+notification jobs intact. Reset the database before applying the changed V1/V2
+migrations. Deploy matching backend/frontend versions together. V3 removes
 the old authentication columns from players: rolling back only to an older
 binary is insufficient; restore the matching database backup or execute a
 reviewed reverse migration. In-memory sessions expire on deployment; users sign
 in again with their existing credentials.
+
+Player primary keys and their Secret Santa foreign keys are UUIDs. The player
+directory endpoint is restricted to ADMIN users.

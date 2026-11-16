@@ -2,14 +2,9 @@ package com.api.somoscardoso.secretsanta
 
 import jakarta.persistence.*
 import java.time.Instant
+import java.util.UUID
 import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
-
-enum class DrawStatus {
-  SCHEDULED,
-  DRAWN,
-  NOT_DRAWN,
-}
 
 @Entity
 @Table(name = "secret_santa_lists")
@@ -17,7 +12,9 @@ class SecretSantaList(
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) var id: Long? = null,
     @Column(length = 120) var name: String = "",
     var drawAt: Instant = Instant.EPOCH,
-    var creatorId: Long = 0,
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "creator_id", columnDefinition = "char(36)", nullable = false)
+    var creatorId: UUID = UUID.randomUUID(),
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(length = 32)

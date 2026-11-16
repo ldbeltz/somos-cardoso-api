@@ -59,7 +59,7 @@ class AuthController(
         UsernamePasswordAuthenticationToken.authenticated(
             requireNotNull(player.user).id.toString(),
             null,
-            listOf(SimpleGrantedAuthority("ROLE_PLAYER")),
+            listOf(SimpleGrantedAuthority("ROLE_${requireNotNull(player.user).role.name}")),
         )
     ChangeSessionIdAuthenticationStrategy().onAuthentication(authentication, request, response)
     CsrfAuthenticationStrategy(HttpSessionCsrfTokenRepository())

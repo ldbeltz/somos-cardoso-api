@@ -8,7 +8,7 @@ import com.api.somoscardoso.user.User
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
-import java.util.Optional
+import java.util.UUID
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.*
@@ -16,6 +16,8 @@ import org.springframework.web.server.ResponseStatusException
 
 class SecretSantaServiceTest {
   private val now = Instant.parse("2026-12-20T12:00:00Z")
+  private val aliceId = UUID.fromString("10000000-0000-0000-0000-000000000001")
+  private val bobId = UUID.fromString("20000000-0000-0000-0000-000000000002")
   private val lists = mock(SecretSantaListRepository::class.java)
   private val entries = mock(SecretSantaPlayerRepository::class.java)
   private val players = mock(PlayerRepository::class.java)
@@ -31,14 +33,14 @@ class SecretSantaServiceTest {
       )
   private val alice =
       Player(
-          id = 1L,
+          id = aliceId,
           name = "Alice",
           user = User(email = "alice@example.test"),
           phoneNumber = "+5511999999999",
       )
   private val bob =
       Player(
-          id = 2L,
+          id = bobId,
           name = "Bob",
           user = User(email = "bob@example.test"),
           phoneNumber = "+5511988888888",
@@ -49,8 +51,8 @@ class SecretSantaServiceTest {
     `when`(players.findByUserId(alice.user!!.id)).thenReturn(alice)
     for (request in
         listOf(
-            CreateSecretSanta("Christmas", now.plusSeconds(60), listOf(1)),
-            CreateSecretSanta("Christmas", now, listOf(1, 2)),
+            CreateSecretSanta("Christmas", now.plusSeconds(60), listOf(UUID.randomUUID())),
+            CreateSecretSanta("Christmas", now, listOf(UUID.randomUUID(), UUID.randomUUID())),
         )) {
       assertEquals(
           400,
@@ -67,18 +69,23 @@ class SecretSantaServiceTest {
   @Test
   fun `due draw persists ring and notifications once`() {
     val list =
-        SecretSantaList(id = 9, name = "Christmas", drawAt = now.minusSeconds(60), creatorId = 1)
+        SecretSantaList(
+            id = 9,
+            name = "Christmas",
+            drawAt = now.minusSeconds(60),
+            creatorId = aliceId,
+        )
     val members =
         listOf(
-            SecretSantaPlayer(id = 11, ssListId = 9, playerId = 1),
-            SecretSantaPlayer(id = 12, ssListId = 9, playerId = 2),
+            SecretSantaPlayer(id = 11, ssListId = 9, playerId = aliceId),
+            SecretSantaPlayer(id = 12, ssListId = 9, playerId = bobId),
         )
     `when`(lists.lockById(9)).thenReturn(list)
     `when`(entries.findAllBySsListIdOrderByIdAsc(9)).thenReturn(members)
-    `when`(players.findAllById(listOf(1L, 2L))).thenReturn(listOf(alice, bob))
+    `when`(players.findAllById(listOf(aliceId, bobId))).thenReturn(listOf(alice, bob))
     assertTrue(service.drawIfDue(9))
-    assertEquals(2L, members[0].recipientId)
-    assertEquals(1L, members[1].recipientId)
+    assertEquals(bobId, members[0].recipientId)
+    assertEquals(aliceId, members[1].recipientId)
     assertEquals(DrawStatus.DRAWN, list.status)
     assertEquals(now, list.drawnAt)
     assertFalse(service.drawIfDue(9))
@@ -95,9 +102,9 @@ class SecretSantaServiceTest {
   @Test
   fun `only registered participants can see detail`() {
     `when`(players.findByUserId(alice.user!!.id)).thenReturn(alice)
-    `when`(lists.findById(9)).thenReturn(Optional.of(SecretSantaList(id = 9)))
+    `when`(lists.lockById(9)).thenReturn(SecretSantaList(id = 9))
     `when`(entries.findAllBySsListIdOrderByIdAsc(9))
-        .thenReturn(listOf(SecretSantaPlayer(id = 12, ssListId = 9, playerId = 2)))
+        .thenReturn(listOf(SecretSantaPlayer(id = 12, ssListId = 9, playerId = bobId)))
     assertEquals(
         403,
         assertThrows(ResponseStatusException::class.java) {
@@ -132,15 +139,15 @@ class SecretSantaServiceTest {
   @Test
   fun `invite join rejects draws that are no longer scheduled with a clear message`() {
     for (status in listOf(DrawStatus.DRAWN, DrawStatus.NOT_DRAWN)) {
-      `when`(lists.findByInviteToken("closed-token"))
-          .thenReturn(
-              SecretSantaList(
-                  id = 9,
-                  drawAt = now.plusSeconds(60),
-                  status = status,
-                  inviteToken = "closed-token",
-              )
+      val list =
+          SecretSantaList(
+              id = 9,
+              drawAt = now.plusSeconds(60),
+              status = status,
+              inviteToken = "closed-token",
           )
+      `when`(lists.findByInviteToken("closed-token")).thenReturn(list)
+      `when`(lists.lockById(9)).thenReturn(list)
 
       val error =
           assertThrows(ResponseStatusException::class.java) {
@@ -157,29 +164,20 @@ class SecretSantaServiceTest {
   }
 
   @Test
-  fun `creator cannot leave and a draw cannot fall below two players`() {
+  fun `creator and participants may leave before a draw`() {
     `when`(lists.lockById(9))
-        .thenReturn(SecretSantaList(id = 9, drawAt = now.plusSeconds(60), creatorId = 1))
+        .thenReturn(SecretSantaList(id = 9, drawAt = now.plusSeconds(60), creatorId = aliceId))
     `when`(players.findByUserId(alice.user!!.id)).thenReturn(alice)
-    assertEquals(
-        409,
-        assertThrows(ResponseStatusException::class.java) {
-              service.leave(9, alice.user!!.id.toString())
-            }
-            .statusCode
-            .value(),
-    )
+    `when`(entries.findBySsListIdAndPlayerId(9, aliceId))
+        .thenReturn(SecretSantaPlayer(id = 11, ssListId = 9, playerId = aliceId))
+    assertDoesNotThrow { service.leave(9, alice.user!!.id.toString()) }
+    verify(entries).delete(any(SecretSantaPlayer::class.java))
+    `when`(lists.lockById(9))
+        .thenReturn(SecretSantaList(id = 9, drawAt = now.plusSeconds(60), creatorId = aliceId))
+    `when`(entries.findBySsListIdAndPlayerId(9, bobId))
+        .thenReturn(SecretSantaPlayer(id = 12, ssListId = 9, playerId = bobId))
     `when`(players.findByUserId(bob.user!!.id)).thenReturn(bob)
-    `when`(entries.findBySsListIdAndPlayerId(9, 2))
-        .thenReturn(SecretSantaPlayer(id = 12, ssListId = 9, playerId = 2))
-    `when`(entries.countBySsListId(9)).thenReturn(2)
-    assertEquals(
-        409,
-        assertThrows(ResponseStatusException::class.java) {
-              service.leave(9, bob.user!!.id.toString())
-            }
-            .statusCode
-            .value(),
-    )
+    assertDoesNotThrow { service.leave(9, bob.user!!.id.toString()) }
+    verify(entries, times(2)).delete(any(SecretSantaPlayer::class.java))
   }
 }

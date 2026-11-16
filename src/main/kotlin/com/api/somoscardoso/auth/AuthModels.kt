@@ -1,6 +1,7 @@
 package com.api.somoscardoso.auth
 
 import com.api.somoscardoso.player.Player
+import com.api.somoscardoso.user.UserRole
 import jakarta.validation.constraints.*
 import java.util.UUID
 
@@ -16,20 +17,22 @@ data class LoginRequest(@field:Email val email: String, val password: String)
 data class PhoneRequest(@field:NotBlank @field:Size(max = 40) val phoneNumber: String)
 
 data class PlayerView(
-    val id: Long,
+    val id: UUID,
     val userId: UUID?,
     val name: String,
     val email: String?,
     val phoneNumber: String?,
+    val role: UserRole?,
 ) {
   companion object {
     fun from(player: Player) =
         PlayerView(
-            requireNotNull(player.id),
+            player.id,
             player.user?.id,
             player.name,
             player.user?.email,
             player.phoneNumber,
+            player.user?.role,
         )
   }
 }

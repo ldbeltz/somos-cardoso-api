@@ -71,7 +71,7 @@ class SecretSantaPersistenceTest {
             CreateSecretSanta(
                 "Cardoso Christmas",
                 Instant.now().plusSeconds(3600),
-                listOf(bob.id!!, clara.id!!),
+                listOf(bob.id, clara.id),
             ),
         )
     assertEquals(3, detail.playerCount)
@@ -146,9 +146,7 @@ class SecretSantaPersistenceTest {
             .statusCode
             .value(),
     )
-    assertFalse(
-        service.all(outsider.user!!.id.toString()).first { it.id == detail.id }.isParticipant
-    )
+    assertTrue(service.all(outsider.user!!.id.toString()).isEmpty())
   }
 
   @Test
@@ -158,7 +156,7 @@ class SecretSantaPersistenceTest {
     val detail =
         service.create(
             alice.user!!.id.toString(),
-            CreateSecretSanta("Invite draw", Instant.now().plusSeconds(3600), listOf(bob.id!!)),
+            CreateSecretSanta("Invite draw", Instant.now().plusSeconds(3600), listOf(bob.id)),
         )
     service.joinByInvite(detail.inviteToken, InviteRegistration("Guest", "+5511977777777"))
     val guest = players.findByPhoneNumber("+5511977777777")!!
@@ -182,7 +180,7 @@ class SecretSantaPersistenceTest {
             CreateSecretSanta(
                 "Closed invite draw",
                 Instant.now().plusSeconds(3600),
-                listOf(bob.id!!),
+                listOf(bob.id),
             ),
         )
     val list = lists.findById(detail.id).orElseThrow()
@@ -205,6 +203,35 @@ class SecretSantaPersistenceTest {
   }
 
   @Test
+  fun `public invite responses include numeric draw ID and join secret word`() {
+    val alice = player("inviteIdAlice")
+    val bob = player("inviteIdBob")
+    val detail =
+        service.create(
+            alice.user!!.id.toString(),
+            CreateSecretSanta("Invite ID draw", Instant.now().plusSeconds(3600), listOf(bob.id)),
+        )
+
+    mvc.perform(get("/api/v1/secret-santas/invites/${detail.inviteToken}"))
+        .andExpect(status().isOk)
+        .andExpect(jsonPath("$.id").value(detail.id))
+        .andExpect(jsonPath("$.name").value("Invite ID draw"))
+        .andExpect(jsonPath("$.status").value("SCHEDULED"))
+
+    mvc.perform(
+            post("/api/v1/secret-santas/invites/${detail.inviteToken}/join")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"name":"Invite ID guest","phoneNumber":"+5511977777666"}"""),
+        )
+        .andExpect(status().isCreated)
+        .andExpect(jsonPath("$.id").value(detail.id))
+        .andExpect(jsonPath("$.name").value("Invite ID draw"))
+        .andExpect(jsonPath("$.status").value("SCHEDULED"))
+        .andExpect(jsonPath("$.secretWord").isNotEmpty)
+  }
+
+  @Test
   fun `leaving removes that membership outbox rows before deleting it`() {
     val alice = player("leaveAlice")
     val bob = player("leaveBob")
@@ -215,7 +242,7 @@ class SecretSantaPersistenceTest {
             CreateSecretSanta(
                 "Leave draw",
                 Instant.now().plusSeconds(3600),
-                listOf(bob.id!!, clara.id!!),
+                listOf(bob.id, clara.id),
             ),
         )
     val bobMembership = entries.findBySsListIdAndPlayerId(detail.id, bob.id!!)!!
@@ -236,7 +263,7 @@ class SecretSantaPersistenceTest {
     val detail =
         service.create(
             alice.user!!.id.toString(),
-            CreateSecretSanta("HTTP draw", Instant.now().plusSeconds(3600), listOf(bob.id!!)),
+            CreateSecretSanta("HTTP draw", Instant.now().plusSeconds(3600), listOf(bob.id)),
         )
     mvc.perform(get("/api/v1/secret-santas")).andExpect(status().isUnauthorized)
     mvc.perform(get("/api/v1/secret-santas/${detail.id}").with(user(outsider.user!!.id.toString())))
@@ -270,7 +297,6 @@ class SecretSantaPersistenceTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""{"name":"Too small","drawAt":"2099-12-24T12:00:00Z","playerIds":[]}""")
         )
-        .andExpect(status().isCreated)
-        .andExpect(jsonPath("$.playerCount").value(1))
+        .andExpect(status().isForbidden)
   }
 }

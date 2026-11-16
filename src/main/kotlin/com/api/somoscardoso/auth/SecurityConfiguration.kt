@@ -3,6 +3,7 @@ package com.api.somoscardoso.auth
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.http.HttpMethod
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.security.crypto.password.PasswordEncoder
@@ -27,6 +28,14 @@ class SecurityConfiguration {
       redirectUri: String,
   ): SecurityFilterChain {
     http.authorizeHttpRequests { auth ->
+      auth.requestMatchers(HttpMethod.POST, "/api/v1/secret-santas/*/reveal").permitAll()
+      auth.requestMatchers(HttpMethod.GET, "/api/v1/players").hasRole("ADMIN")
+      auth.requestMatchers(HttpMethod.DELETE, "/api/v1/secret-santas/*/players/me").authenticated()
+      auth.requestMatchers(HttpMethod.POST, "/api/v1/secret-santas").hasRole("ADMIN")
+      auth.requestMatchers(HttpMethod.PUT, "/api/v1/secret-santas/*").hasRole("ADMIN")
+      auth.requestMatchers(HttpMethod.DELETE, "/api/v1/secret-santas/*").hasRole("ADMIN")
+      auth.requestMatchers(HttpMethod.POST, "/api/v1/secret-santas/*/players").hasRole("ADMIN")
+      auth.requestMatchers(HttpMethod.DELETE, "/api/v1/secret-santas/*/players/*").hasRole("ADMIN")
       auth
           .requestMatchers(
               "/api/v1/auth/csrf",

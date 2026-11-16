@@ -3,6 +3,7 @@ package com.api.somoscardoso.secretsanta
 import java.security.SecureRandom
 import java.util.Collections
 import java.util.LinkedList
+import java.util.UUID
 import org.springframework.stereotype.Component
 
 /** Shuffled ring: every player gives once and receives once, with no self-match. */
@@ -10,7 +11,7 @@ import org.springframework.stereotype.Component
 class CircularDraw {
   private val random = SecureRandom()
 
-  fun assign(playerIds: List<Long>): Map<Long, Long> {
+  fun assign(playerIds: List<UUID>): Map<UUID, UUID> {
     require(playerIds.size >= 2) { "At least two players are required" }
     require(playerIds.distinct().size == playerIds.size) { "Players must be distinct" }
     val shuffled = playerIds.toMutableList()
