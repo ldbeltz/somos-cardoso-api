@@ -12,6 +12,7 @@ class User(
     @JdbcTypeCode(SqlTypes.CHAR)
     @Column(columnDefinition = "char(36)")
     var id: UUID = UUID.randomUUID(),
+    @Column(nullable = false, length = 100) var name: String = "",
     @Column(nullable = false, unique = true, length = 254) var email: String = "",
     @Column(name = "phone_number", length = 16, unique = true) var phoneNumber: String? = null,
     @Column(name = "password_hash") var passwordHash: String? = null,

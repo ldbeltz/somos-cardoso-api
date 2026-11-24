@@ -5,10 +5,12 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import org.springframework.web.client.RestClientResponseException
 
 interface WhatsAppSender {
   val enabled: Boolean
@@ -34,6 +36,7 @@ class MetaWhatsAppSender(
     @Value("\${app.whatsapp.registration.time-zone:America/Maceio}")
     private val registrationTimeZone: String,
 ) : WhatsAppSender {
+  private val logger = LoggerFactory.getLogger(javaClass)
   private val credentialsReady = accessToken.isNotBlank() && phoneNumberId.isNotBlank()
   private val resultReady = enabled && credentialsReady && resultTemplateName.isNotBlank()
   private val registrationReady =
@@ -61,17 +64,48 @@ class MetaWhatsAppSender(
           .build()
 
   override fun send(notification: WhatsAppNotification) {
+    send(notification, client)
+  }
+
+  internal fun send(notification: WhatsAppNotification, client: RestClient) {
     val payload = payload(notification)
     check(notification.type in enabledTypes) {
       "WhatsApp template is not configured for ${notification.type}"
     }
-    client
-        .post()
-        .uri("/$apiVersion/$phoneNumberId/messages")
-        .headers { it.setBearerAuth(accessToken) }
-        .body(payload)
-        .retrieve()
-        .toBodilessEntity()
+    try {
+      val response =
+          client
+              .post()
+              .uri("/$apiVersion/$phoneNumberId/messages")
+              .headers { it.setBearerAuth(accessToken) }
+              .body(payload)
+              .retrieve()
+              .toEntity(String::class.java)
+      logger.info(
+          "WhatsApp send accepted by API: notificationId={}, type={}, status={}, response={}",
+          notification.id,
+          notification.type,
+          response.statusCode.value(),
+          response.body,
+      )
+    } catch (exception: RestClientResponseException) {
+      logger.error(
+          "WhatsApp API rejected send: notificationId={}, type={}, status={}, response={}",
+          notification.id,
+          notification.type,
+          exception.statusCode.value(),
+          exception.responseBodyAsString,
+      )
+      throw exception
+    } catch (exception: Exception) {
+      logger.error(
+          "WhatsApp send failed before receiving an API response: notificationId={}, type={}",
+          notification.id,
+          notification.type,
+          exception,
+      )
+      throw exception
+    }
   }
 
   /** Package-visible payload construction keeps template parameters directly testable. */

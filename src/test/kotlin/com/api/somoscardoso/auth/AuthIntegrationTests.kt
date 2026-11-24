@@ -89,7 +89,7 @@ class AuthIntegrationTests {
             )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.name").value("Ana"))
-            .andExpect(jsonPath("$.userId").isString)
+            .andExpect(jsonPath("$.id").isString)
             .andExpect(jsonPath("$.passwordHash").doesNotExist())
             .andReturn()
     val session = result.request.session as MockHttpSession

@@ -1,3 +1,4 @@
 /gradlew text eol=lf
 *.bat text eol=crlf
 *.jar binary
+AGENTS.md whitespace=-blank-at-eol

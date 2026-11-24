@@ -3,6 +3,7 @@ package com.api.somoscardoso.messaging
 import java.time.Instant
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -79,5 +80,17 @@ class WhatsAppSenderTest {
     val components = template["components"] as List<*>
     val parameters = ((components.single() as Map<*, *>)["parameters"] as List<*>)
     assertEquals(listOf("Natal", "Bia"), parameters.map { (it as Map<*, *>)["text"] })
+  }
+
+  @Test
+  fun `should reject a registration payload without its scheduled draw time`() {
+    val notification =
+        WhatsAppNotification(
+            phone = "+5511999999999",
+            groupName = "Natal",
+            type = NotificationType.REGISTRATION,
+        )
+
+    assertThrows(IllegalArgumentException::class.java) { sender().payload(notification) }
   }
 }

@@ -1,3 +1,5 @@
+import kotlinx.kover.gradle.plugin.dsl.*
+
 plugins {
   kotlin("jvm") version "2.3.21"
   kotlin("plugin.spring") version "2.3.21"
@@ -5,6 +7,7 @@ plugins {
   id("io.spring.dependency-management") version "1.1.7"
   id("org.asciidoctor.jvm.convert") version "4.0.5"
   id("com.ncorti.ktfmt.gradle") version "0.27.0"
+  id("org.jetbrains.kotlinx.kover") version "0.9.11"
   kotlin("plugin.jpa") version "2.3.21"
 }
 
@@ -36,6 +39,7 @@ dependencies {
   testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
   testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
   testImplementation("org.springframework.restdocs:spring-restdocs-mockmvc")
+  testImplementation("io.mockk:mockk:1.14.9")
   testRuntimeOnly("org.junit.platform:junit-platform-launcher")
   testRuntimeOnly("com.h2database:h2")
   // Testcontainers
@@ -63,4 +67,17 @@ tasks.test { outputs.dir(project.extra["snippetsDir"]!!) }
 tasks.asciidoctor {
   inputs.dir(project.extra["snippetsDir"]!!)
   dependsOn(tasks.test)
+}
+
+kover {
+  reports {
+    filters { excludes { classes("com.api.somoscardoso.SomoscardosoApplicationKt") } }
+    total {
+      log {
+        aggregationForGroup = AggregationType.COVERED_PERCENTAGE
+        coverageUnits = CoverageUnit.LINE
+      }
+      verify { rule { minBound(100) } }
+    }
+  }
 }

@@ -1,6 +1,6 @@
 package com.api.somoscardoso.auth
 
-import com.api.somoscardoso.player.Player
+import com.api.somoscardoso.user.User
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import jakarta.validation.Valid
@@ -34,32 +34,32 @@ class AuthController(
       @Valid @RequestBody body: RegisterRequest,
       request: HttpServletRequest,
       response: HttpServletResponse,
-  ): PlayerView = signIn(auth.register(body), request, response)
+  ): UserView = signIn(auth.register(body), request, response)
 
   @PostMapping("/login")
   fun login(
       @Valid @RequestBody body: LoginRequest,
       request: HttpServletRequest,
       response: HttpServletResponse,
-  ): PlayerView = signIn(auth.authenticate(body), request, response)
+  ): UserView = signIn(auth.authenticate(body), request, response)
 
   @GetMapping("/me")
-  fun me(authentication: Authentication) = PlayerView.from(auth.current(authentication.name))
+  fun me(authentication: Authentication) = UserView.from(auth.current(authentication.name))
 
   @PutMapping("/me")
   fun update(@Valid @RequestBody body: PhoneRequest, authentication: Authentication) =
-      PlayerView.from(auth.updatePhone(authentication.name, body))
+      UserView.from(auth.updatePhone(authentication.name, body))
 
   private fun signIn(
-      player: Player,
+      user: User,
       request: HttpServletRequest,
       response: HttpServletResponse,
-  ): PlayerView {
+  ): UserView {
     val authentication =
         UsernamePasswordAuthenticationToken.authenticated(
-            requireNotNull(player.user).id.toString(),
+            requireNotNull(user).id.toString(),
             null,
-            listOf(SimpleGrantedAuthority("ROLE_${requireNotNull(player.user).role.name}")),
+            listOf(SimpleGrantedAuthority("ROLE_${requireNotNull(user).role.name}")),
         )
     ChangeSessionIdAuthenticationStrategy().onAuthentication(authentication, request, response)
     CsrfAuthenticationStrategy(HttpSessionCsrfTokenRepository())
@@ -68,6 +68,6 @@ class AuthController(
     context.authentication = authentication
     SecurityContextHolder.setContext(context)
     HttpSessionSecurityContextRepository().saveContext(context, request, response)
-    return PlayerView.from(player)
+    return UserView.from(user)
   }
 }

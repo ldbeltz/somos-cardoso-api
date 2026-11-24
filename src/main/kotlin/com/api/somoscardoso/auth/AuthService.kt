@@ -14,15 +14,15 @@ import org.springframework.web.server.ResponseStatusException
 
 @Service
 class AuthService(
-    private val players: PlayerRepository,
-    private val users: UserRepository,
+    private val playerRepository: PlayerRepository,
+    private val userRepository: UserRepository,
     private val encoder: PasswordEncoder,
 ) {
   @Transactional
-  fun register(request: RegisterRequest): Player {
+  fun register(request: RegisterRequest): User {
     val email = request.email.trim().lowercase()
     val phone = PhoneNumbers.normalize(request.phoneNumber)
-    if (users.findByEmail(email) != null)
+    if (userRepository.findByEmail(email) != null)
         throw ResponseStatusException(
             HttpStatus.CONFLICT,
             "An account with this email already exists",
@@ -32,29 +32,30 @@ class AuthService(
             HttpStatus.BAD_REQUEST,
             "Password must fit within 72 UTF-8 bytes",
         )
-    val existing = players.findByPhoneNumber(phone)
-    if (existing?.user != null)
+    val existingPlayer = playerRepository.findByPhoneNumber(phone)
+    if (existingPlayer?.user != null)
         throw ResponseStatusException(HttpStatus.CONFLICT, "This phone number is already in use")
     val user =
-        users.saveAndFlush(
+        userRepository.saveAndFlush(
             User(
+                name = request.name.trim(),
                 email = email,
                 phoneNumber = phone,
                 passwordHash = encoder.encode(request.password),
             )
         )
-    if (existing != null) {
-      existing.name = request.name.trim()
-      existing.user = user
-      return players.saveAndFlush(existing)
+    if (existingPlayer != null) {
+      existingPlayer.name = request.name.trim()
+      existingPlayer.user = user
+      playerRepository.save(existingPlayer)
+      return user
     }
-    return players.saveAndFlush(
-        Player(name = request.name.trim(), phoneNumber = phone, user = user)
-    )
+    playerRepository.save(Player(name = request.name.trim(), phoneNumber = phone, user = user))
+    return user
   }
 
-  fun authenticate(request: LoginRequest): Player {
-    val user = users.findByEmail(request.email.trim().lowercase())
+  fun authenticate(request: LoginRequest): User {
+    val user = userRepository.findByEmail(request.email.trim().lowercase())
     if (
         user?.passwordHash == null ||
             request.password.toByteArray(Charsets.UTF_8).size > 72 ||
@@ -64,26 +65,32 @@ class AuthService(
     return current(user.id.toString())
   }
 
-  fun current(subject: String): Player {
+  fun current(subject: String): User {
     val userId =
         try {
           UUID.fromString(subject)
         } catch (_: IllegalArgumentException) {
           throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Please sign in")
         }
-    return players.findByUserId(userId)
-        ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Please sign in")
+    return userRepository.findById(userId).orElseThrow {
+      ResponseStatusException(HttpStatus.UNAUTHORIZED, "Please sign in")
+    }
   }
 
   @Transactional
-  fun updatePhone(subject: String, request: PhoneRequest): Player {
-    val player = current(subject)
+  fun updatePhone(subject: String, request: PhoneRequest): User {
+    val user = current(subject)
     val phone = PhoneNumbers.normalize(request.phoneNumber)
-    val other = players.findByPhoneNumber(phone)
-    if (other != null && other.id != player.id)
+    val otherPlayer = playerRepository.findByPhoneNumber(phone)
+    if (otherPlayer != null && otherPlayer.user?.id != user.id)
         throw ResponseStatusException(HttpStatus.CONFLICT, "This phone number is already in use")
-    player.phoneNumber = phone
-    requireNotNull(player.user).phoneNumber = phone
-    return players.save(player)
+    val userPlayer = playerRepository.findByUserId(user.id)
+    userPlayer?.phoneNumber = phone
+    user.phoneNumber = phone
+    userRepository.saveAndFlush(user)
+    if (userPlayer != null) {
+      playerRepository.save(userPlayer)
+    }
+    return user
   }
 }
